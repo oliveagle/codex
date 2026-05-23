@@ -1,0 +1,2 @@
+[submodule "submodules/codex"]
+	url = git@github.com:oliveagle/codex.git

@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "codegen-tests",
     "aws-auth",
     "analytics",
     "agent-graph-store",
