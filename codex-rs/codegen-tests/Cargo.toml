@@ -1,0 +1,25 @@
+[package]
+name = "codex-codegen-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# Math utilities for testing code generation
+num-traits = "0.2"
+
+[dev-dependencies]
+# Test dependencies
+criterion = "0.5"
+
+[[bin]]
+name = "math_demo"
+path = "src/main.rs"
+
+[[test]]
+name = "math_tests"
+path = "tests/math_tests.rs"
+
+[[bin]]
+name = "buggy_test"
+path = "src/buggy_test.rs"
