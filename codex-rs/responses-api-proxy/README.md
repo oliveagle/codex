@@ -88,9 +88,21 @@ printenv AZURE_OPENAI_API_KEY | env -u AZURE_OPENAI_API_KEY codex-responses-api-
   --upstream-url "https://YOUR_PROJECT_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT/responses?api-version=2025-04-01-preview"
 ```
 
+## Chat Completions API
+
+In addition to the Responses API endpoint (`POST /v1/responses`), the proxy now supports the OpenAI-compatible Chat Completions API endpoint (`POST /v1/chat/completions`). This compatibility layer performs bidirectional conversion between Chat Completions and Responses API formats internally.
+
+**Supported Features:**
+- Full message conversation history (system, user, assistant, tool roles)
+- Function calling with `tools` and `tool_choice`
+- Both streaming (`stream: true`) and non-streaming modes
+- SSE (Server-Sent Events) for streaming responses
+
+For detailed documentation including examples, conversion rules, and limitations, see [Chat Completions API Compatibility](docs/chat_completions_compat_20260609.md).
+
 ## Notes
 
-- Only `POST /v1/responses` is permitted. No query strings are allowed.
+- Only `POST /v1/responses` and `POST /v1/chat/completions` are permitted. No query strings are allowed.
 - All request headers are forwarded to the upstream call (aside from overriding `Authorization` and `Host`). Response status and content-type are mirrored from upstream.
 
 ## Hardening Details

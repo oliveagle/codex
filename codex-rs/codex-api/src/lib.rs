@@ -11,6 +11,8 @@ pub(crate) mod requests;
 pub(crate) mod search;
 pub(crate) mod sse;
 pub(crate) mod telemetry;
+pub mod conversion;
+pub mod types;
 
 pub use crate::requests::headers::build_session_headers;
 pub use codex_client::RequestTelemetry;
@@ -107,3 +109,26 @@ pub use crate::telemetry::SseTelemetry;
 pub use crate::telemetry::WebsocketTelemetry;
 pub use codex_protocol::protocol::RealtimeAudioFrame;
 pub use codex_protocol::protocol::RealtimeEvent;
+
+// Chat Completions API types
+pub use crate::types::chat::ChatChunkChoice;
+pub use crate::types::chat::ChatCompletionChunk;
+pub use crate::types::chat::ChatCompletionRequest;
+pub use crate::types::chat::ChatCompletionResponse;
+pub use crate::types::chat::ChatFunction;
+pub use crate::types::chat::ChatFunctionCall;
+pub use crate::types::chat::ChatFunctionCallDelta;
+pub use crate::types::chat::ChatFunctionChoice;
+pub use crate::types::chat::ChatMessage;
+pub use crate::types::chat::ChatMessageContent;
+pub use crate::types::chat::ChatMessageDelta;
+pub use crate::types::chat::ChatMessageRole;
+pub use crate::types::chat::ChatRequiredFunction;
+pub use crate::types::chat::ChatStop;
+pub use crate::types::chat::ChatTool;
+pub use crate::types::chat::ChatToolCall;
+pub use crate::types::chat::ChatToolCallDelta;
+pub use crate::types::chat::ChatToolChoice;
+pub use crate::types::chat::ChatToolType;
+pub use crate::types::chat::ChatUsage;
+pub use crate::types::chat::FinishReason;

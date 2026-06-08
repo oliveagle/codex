@@ -19,7 +19,9 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+codex-api = { workspace = true }
 codex-process-hardening = { workspace = true }
+codex-protocol = { workspace = true }
 ctor = { workspace = true }
 libc = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls"] }
@@ -30,3 +32,5 @@ zeroize = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls"] }
+serde_json = { workspace = true }

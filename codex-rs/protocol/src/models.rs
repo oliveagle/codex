@@ -20,6 +20,7 @@ use crate::permissions::FileSystemSandboxPolicy;
 use crate::permissions::FileSystemSpecialPath;
 use crate::permissions::NetworkSandboxPolicy;
 use crate::protocol::SandboxPolicy;
+use crate::protocol::TokenUsage;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::ImageProcessingError;
@@ -1257,6 +1258,30 @@ impl ResponseItem {
             Self::Other => None,
         }
     }
+}
+
+/// A complete response from the OpenAI Responses API (non-streaming response body).
+///
+/// This is used for deserializing the `response.completed` SSE event payload
+/// or any direct HTTP response from the Responses API.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ResponsesApiResponse {
+    pub id: String,
+    pub object: String,
+    pub created_at: u64,
+    pub model: String,
+    pub status: String,
+    pub output: Vec<ResponseItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<TokenUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incomplete_details: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 pub const BASE_INSTRUCTIONS_DEFAULT: &str = include_str!("prompts/base_instructions/default.md");

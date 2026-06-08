@@ -3739,7 +3739,9 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "codex-api",
  "codex-process-hardening",
+ "codex-protocol",
  "ctor 0.6.3",
  "libc",
  "pretty_assertions",
