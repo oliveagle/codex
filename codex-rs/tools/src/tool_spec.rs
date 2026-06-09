@@ -9,6 +9,7 @@ use codex_protocol::config_types::WebSearchUserLocation as ConfigWebSearchUserLo
 use codex_protocol::config_types::WebSearchUserLocationType;
 use serde::Serialize;
 use serde_json::Value;
+use serde_json::json;
 
 /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
 /// Responses API.
@@ -84,6 +85,49 @@ pub fn create_tools_json_for_responses_api(
         let json = serde_json::to_value(tool)?;
         tools_json.push(json);
     }
+
+    Ok(tools_json)
+}
+
+/// Returns JSON values that are compatible with Function Calling in the
+/// Chat Completions API:
+/// https://platform.openai.com/docs/guides/function-calling?api-mode=chat
+pub fn create_tools_json_for_chat_completions_api(
+    tools: &[ToolSpec],
+) -> Result<Vec<Value>, serde_json::Error> {
+    let responses_api_tools = create_tools_json_for_responses_api(tools)?;
+
+    // The Chat Completions API wraps the function definition in a
+    // `function` field.  Example:
+    // { "type": "function", "function": { "name": "...", "description": "...", "parameters": { ... } } }
+    let tools_json = responses_api_tools
+        .into_iter()
+        .filter_map(|tool| {
+            if tool.get("type") != Some(&serde_json::Value::String("function".to_string())) {
+                // Non-function tools (web_search, image_generation, namespace)
+                // are not supported in Chat Completions API.
+                return None;
+            }
+
+            let mut map = tool
+                .as_object()
+                .expect("function tool must be an object")
+                .clone();
+            let name = map
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            // Remove "type" field as it belongs outside the function wrapper.
+            map.remove("type");
+
+            Some(json!({
+                "type": "function",
+                "function": map,
+                "name": name,
+            }))
+        })
+        .collect::<Vec<Value>>();
 
     Ok(tools_json)
 }
