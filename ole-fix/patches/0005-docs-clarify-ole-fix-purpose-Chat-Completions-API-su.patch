@@ -1,0 +1,139 @@
+From 76bc71383ceca399a440e3ea4468146df40d9203 Mon Sep 17 00:00:00 2001
+From: oliveagle <oliveagle@gmail.com>
+Date: Wed, 10 Jun 2026 00:37:15 +0800
+Subject: [PATCH 1/2] docs: clarify ole-fix purpose - Chat Completions API
+ support
+
+- Update README to emphasize Chat Completions API compatibility goal
+- Most providers only support /v1/chat/completions, not Responses API
+- Add upstream conflict handling workflow
+- Emphasize functionality preservation over clean patch application
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+---
+ ole-fix/README.md | 84 ++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 80 insertions(+), 4 deletions(-)
+
+diff --git a/ole-fix/README.md b/ole-fix/README.md
+index 213a7e531..60d3f7370 100644
+--- a/ole-fix/README.md
++++ b/ole-fix/README.md
+@@ -1,10 +1,28 @@
+ # ole-fix
+ 
+-用户自定义补丁集。这些补丁来自 oliveagle 的本地开发，不应与上游 codex 冲突。
++保留 codex 对 **Chat Completions API** 的本地补丁集。
+ 
+ ## 目标
+ 
+-当上游 codex 有新版本时，这些补丁应当能够干净地 rebase 到最新 upstream main 上。
++大多数 LLM Provider (Azure OpenAI, OpenRouter, 各种自建兼容服务) 都只支持 `/v1/chat/completions` 接口模式。  
++而 upstream codex 主要基于 Responses API 设计, 不直接提供 Chat Completions 兼容层。
++
++**ole-fix 的存在意义：确保 codex 始终支持 Chat Completions API。**
++
++### 具体要求
++
++1. **保留 Chat Completions 支持**：每次 rebase 到上游最新版本时，必须确保 `/v1/chat/completions` 端点、转换逻辑、SSE 流式响应等功能正常工作
++2. **补丁干净应用**：尽可能使补丁可干净应用到上游最新版本。如果上游变更导致补丁冲突，需要修改补丁内容以适应新的代码结构
++3. **附带修复**：保留相关的修复和优化（依赖更新、清理未使用代码、codegen 测试等）
++4. **优先保证功能**：如果新版本完全无法干净应用 patch，需要手动修改代码以确保 Chat Completions 支持仍然存在
++
++### 核心功能
++
++- `/v1/chat/completions` 端点兼容
++- Chat↔Responses 类型双向转换
++- 流式响应 (SSE) 支持
++- Tool calls 支持
++- 模型信息更新
+ 
+ ## 目录结构
+ 
+@@ -84,13 +102,13 @@ git apply ole-fix/modules/chat-conversion/chat-conversion.patch
+ - 添加 codegen-tests 测试基础设施
+ - 影响文件: `.gitmodules`, `Cargo.*`, `codegen-tests/`
+ 
+-### 0002 - add Chat Completions API compatibility
++### 0002 - add Chat Completions API compatibility (核心)
+ - 添加 /v1/chat/completions 端点转换层
+ - 实现 Chat↔Responses 类型定义和转换逻辑
+ - 更新模型信息 (models.json)
+ - 影响文件: `conversion/`, `types/chat.rs`, `tests/chat_completions.rs`
+ 
+-### 0003 - add Chat Completions API support
++### 0003 - add Chat Completions API support (核心)
+ - 添加 Chat endpoint, request 和 SSE 类型
+ - 添加 Chat Completions 请求/响应处理
+ - 更新模型提供者信息
+@@ -99,10 +117,68 @@ git apply ole-fix/modules/chat-conversion/chat-conversion.patch
+ ### 0004 - remove unused ImagesClient re-export
+ - 清理 `lib.rs` 中未使用的 `ImagesClient` 导出
+ 
++## 上游冲突处理流程
++
++当上游 codex 更新导致补丁无法干净应用时：
++
++### 1. 分析冲突原因
++
++```bash
++# 检查具体哪些文件冲突
++git apply --reject ole-fix/patches/0002-*.patch
++find . -name "*.rej" | head
++```
++
++### 2. 评估上游变更
++
++查看上游是否：
++- 移动/重命名了相关文件 → 更新补丁中的路径
++- 重构了类型定义 → 适配新的类型结构
++- 修改了 SSE/流式处理逻辑 → 调整转换代码
++- 删除了相关 API → 寻找替代实现方式
++
++### 3. 修改补丁
++
++```bash
++# 1. 应用除冲突补丁外的所有补丁
++git apply ole-fix/patches/0001-*.patch
++git apply ole-fix/patches/0003-*.patch
++git apply ole-fix/patches/0004-*.patch
++
++# 2. 手动应用冲突的补丁 (例如 0002)
++# 编辑代码以适配上游最新结构
++
++# 3. 生成新补丁
++git add -A
++git diff --cached > ole-fix/patches/0002-feat-chat-completions-v2.patch
++```
++
++### 4. 重新测试
++
++```bash
++./ole-fix/tests/test_rebase.sh origin/main
++```
++
++### 5. 确保功能完整
++
++```bash
++# 编译检查
++cd codex-rs && cargo check
++
++# 运行测试
++cargo test --package codex-api
++cargo test --package responses-api-proxy
++```
++
++**关键原则**：即使上游重写了相关代码，也要确保 Chat Completions API 支持仍然存在。如果 upstream 完全移除了相关接口，需要在新代码库上重新实现。
++
+ ## 测试验证
+ 
+ ```bash
+ # 快速测试: 在 7d47056ea 上验证所有补丁可干净应用
+ cd codex && git checkout 7d47056ea
+ cd .. && ./ole-fix/tests/test_rebase.sh 7d47056ea
++
++# 验证 Chat Completions 转换逻辑
++cd codex-rs && cargo test --package codex-api conversion
+ ```
+-- 
+2.43.0
+
