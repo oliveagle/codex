@@ -1,0 +1,984 @@
+diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
+index 9b5da1d81..2cb8bd5aa 100644
+--- a/codex-rs/Cargo.lock
++++ b/codex-rs/Cargo.lock
+@@ -3541,7 +3541,9 @@ version = "0.0.0"
+ dependencies = [
+  "anyhow",
+  "clap",
++ "codex-api",
+  "codex-process-hardening",
++ "codex-protocol",
+  "ctor 0.6.3",
+  "libc",
+  "pretty_assertions",
+diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
+index 5a2ed71dd..5d05515d6 100644
+--- a/codex-rs/core/src/session/turn.rs
++++ b/codex-rs/core/src/session/turn.rs
+@@ -999,11 +999,11 @@ async fn run_sampling_request(
+                 "stream disconnected - retrying sampling request ({retries}/{max_retries} in {delay:?})...",
+             );
+ 
+-            // In release builds, hide the first websocket retry notification to reduce noisy
+-            // transient reconnect messages. In debug builds, keep full visibility for diagnosis.
++            // In release builds, hide the first retry notification to reduce noisy
++            // transient reconnect messages regardless of transport (HTTP/SSE or WebSocket).
++            // In debug builds, keep full visibility for diagnosis.
+             let report_error = retries > 1
+-                || cfg!(debug_assertions)
+-                || !sess.services.model_client.responses_websocket_enabled();
++                || cfg!(debug_assertions);
+             if report_error {
+                 // Surface retry information to any UI/front‑end so the
+                 // user understands what is happening instead of staring
+diff --git a/codex-rs/exec/src/event_processor_with_human_output.rs b/codex-rs/exec/src/event_processor_with_human_output.rs
+index c3190b874..032df2f41 100644
+--- a/codex-rs/exec/src/event_processor_with_human_output.rs
++++ b/codex-rs/exec/src/event_processor_with_human_output.rs
+@@ -1,5 +1,7 @@
+ use std::io::IsTerminal;
++use std::io::Write;
+ use std::path::PathBuf;
++use std::time::SystemTime;
+ 
+ use codex_app_server_protocol::CommandExecutionStatus;
+ use codex_app_server_protocol::McpToolCallStatus;
+@@ -20,6 +22,85 @@ use crate::event_processor::CodexStatus;
+ use crate::event_processor::EventProcessor;
+ use crate::event_processor::handle_last_message;
+ 
++/// Phase suffix for a message type (started vs completed)
++enum MsgPhase {
++    Req,  // "(req)" — tool call initiated
++    Resp, // "(resp)" — tool call completed
++}
++
++impl MsgPhase {
++    fn suffix(&self) -> &'static str {
++        match self {
++            MsgPhase::Req => "(req)",
++            MsgPhase::Resp => "(resp)",
++        }
++    }
++}
++
++/// Message type for display formatting
++enum MsgType {
++    User,
++    Assistant,
++    Exec,
++    Mcp,
++    Collab,
++    WebSearch,
++    FileChange,
++    Error,
++    Stats,
++    Info,
++    Reasoning,
++    Warning,
++}
++
++impl MsgType {
++    fn base_label(&self) -> &'static str {
++        match self {
++            MsgType::User => "user",
++            MsgType::Assistant => "assistant",
++            MsgType::Exec => "exec",
++            MsgType::Mcp => "mcp",
++            MsgType::Collab => "collab",
++            MsgType::WebSearch => "web_search",
++            MsgType::FileChange => "file_change",
++            MsgType::Error => "ERROR",
++            MsgType::Stats => "STATS",
++            MsgType::Info => "info",
++            MsgType::Reasoning => "thinking",
++            MsgType::Warning => "warning",
++        }
++    }
++
++    fn label(&self, phase: Option<&MsgPhase>) -> String {
++        match phase {
++            Some(phase) => format!("{}{}", self.base_label(), phase.suffix()),
++            None => self.base_label().to_string(),
++        }
++    }
++
++    fn style(&self, proc: &EventProcessorWithHumanOutput) -> Style {
++        match self {
++            MsgType::User => proc.cyan,
++            MsgType::Assistant => proc.green,
++            MsgType::Exec => proc.yellow,
++            MsgType::Mcp => proc.cyan,
++            MsgType::Collab => proc.yellow,
++            MsgType::WebSearch => proc.cyan,
++            MsgType::FileChange => proc.dimmed,
++            MsgType::Error => proc.red,
++            MsgType::Stats => proc.magenta,
++            MsgType::Info => proc.dimmed,
++            MsgType::Reasoning => proc.dimmed,
++            MsgType::Warning => proc.yellow,
++        }
++    }
++
++    fn is_bold(&self, phase: Option<&MsgPhase>) -> bool {
++        matches!(self, MsgType::Error | MsgType::Stats)
++            || matches!(phase, Some(MsgPhase::Resp))
++    }
++}
++
+ pub(crate) struct EventProcessorWithHumanOutput {
+     bold: Style,
+     cyan: Style,
+@@ -36,9 +117,54 @@ pub(crate) struct EventProcessorWithHumanOutput {
+     final_message_rendered: bool,
+     emit_final_message_on_shutdown: bool,
+     last_total_token_usage: Option<ThreadTokenUsage>,
++    turn_start_time: Option<SystemTime>,
++    /// Track the current reasoning item being streamed so that we know when to
++    /// emit a new section header for subsequent deltas.
++    current_reasoning_item_id: Option<String>,
++    /// Counters for exec session stats
++    command_exec_count: u64,
++    mcp_tool_call_count: u64,
++    collab_tool_call_count: u64,
++    file_change_count: u64,
++    web_search_count: u64,
++}
++
++/// Format current time as HH:MM:SS
++fn format_timestamp() -> String {
++    let now = SystemTime::now()
++        .duration_since(SystemTime::UNIX_EPOCH)
++        .unwrap_or_default();
++    let secs = now.as_secs();
++    let hh = (secs / 3600) % 24;
++    let mm = (secs / 60) % 60;
++    let ss = secs % 60;
++    format!("{:02}:{:02}:{:02}", hh, mm, ss)
++}
++
++/// Format short hash from item id
++fn short_hash(id: &str) -> String {
++    if id.len() > 8 {
++        id[..8].to_string()
++    } else {
++        id.to_string()
++    }
+ }
+ 
+ impl EventProcessorWithHumanOutput {
++    /// Format message prefix: TYPE (short_hash) [HH:MM:SS]
++    fn format_msg_prefix(&self, msg_type: MsgType, phase: Option<MsgPhase>, id: Option<&str>) -> String {
++        let style = msg_type.style(self);
++        let label = msg_type.label(phase.as_ref());
++        let hash = id.map_or(String::new(), |id| format!(" ({})", short_hash(id)));
++        let timestamp = format_timestamp();
++        let prefix = format!("{}{} [{}]", label, hash, timestamp);
++        if msg_type.is_bold(phase.as_ref()) {
++            prefix.style(style).bold().to_string()
++        } else {
++            prefix.style(style).to_string()
++        }
++    }
++
+     pub(crate) fn create_with_ansi(
+         with_ansi: bool,
+         config: &Config,
+@@ -61,35 +187,50 @@ impl EventProcessorWithHumanOutput {
+             final_message_rendered: false,
+             emit_final_message_on_shutdown: false,
+             last_total_token_usage: None,
++            turn_start_time: None,
++            current_reasoning_item_id: None,
++            command_exec_count: 0,
++            mcp_tool_call_count: 0,
++            collab_tool_call_count: 0,
++            file_change_count: 0,
++            web_search_count: 0,
+         }
+     }
+ 
+     fn render_item_started(&self, item: &ThreadItem) {
+         match item {
+-            ThreadItem::CommandExecution { command, cwd, .. } => {
++            ThreadItem::CommandExecution { command, cwd, id, .. } => {
+                 eprintln!(
+                     "{}\n{} in {}",
+-                    "exec".style(self.italic).style(self.magenta),
++                    self.format_msg_prefix(MsgType::Exec, Some(MsgPhase::Req), Some(id)),
+                     command.style(self.bold),
+                     cwd.display()
+                 );
+             }
+-            ThreadItem::McpToolCall { server, tool, .. } => {
++            ThreadItem::McpToolCall { server, tool, id, .. } => {
+                 eprintln!(
+                     "{} {} {}",
+-                    "mcp:".style(self.bold),
++                    self.format_msg_prefix(MsgType::Mcp, Some(MsgPhase::Req), Some(id)),
+                     format!("{server}/{tool}").style(self.cyan),
+                     "started".style(self.dimmed)
+                 );
+             }
+-            ThreadItem::WebSearch { query, .. } => {
+-                eprintln!("{} {}", "web search:".style(self.bold), query);
++            ThreadItem::WebSearch { query, id, .. } => {
++                eprintln!(
++                    "{} {}",
++                    self.format_msg_prefix(MsgType::WebSearch, Some(MsgPhase::Req), Some(id)),
++                    query
++                );
+             }
+-            ThreadItem::FileChange { .. } => {
+-                eprintln!("{}", "apply patch".style(self.bold));
++            ThreadItem::FileChange { id, .. } => {
++                eprintln!("{}", self.format_msg_prefix(MsgType::FileChange, Some(MsgPhase::Req), Some(id)));
+             }
+-            ThreadItem::CollabAgentToolCall { tool, .. } => {
+-                eprintln!("{} {:?}", "collab:".style(self.bold), tool);
++            ThreadItem::CollabAgentToolCall { id, tool, .. } => {
++                eprintln!(
++                    "{} {:?}",
++                    self.format_msg_prefix(MsgType::Collab, Some(MsgPhase::Req), Some(id)),
++                    tool
++                );
+             }
+             _ => {}
+         }
+@@ -97,24 +238,25 @@ impl EventProcessorWithHumanOutput {
+ 
+     fn render_item_completed(&mut self, item: ThreadItem) {
+         match item {
+-            ThreadItem::AgentMessage { text, .. } => {
+-                eprintln!(
+-                    "{}\n{}",
+-                    "codex".style(self.italic).style(self.magenta),
+-                    text
+-                );
++            ThreadItem::AgentMessage { text, id, .. } => {
++                eprintln!("{}", self.format_msg_prefix(MsgType::Assistant, None, Some(&id)));
++                eprintln!("{}", text);
+                 self.final_message = Some(text);
+                 self.final_message_rendered = true;
+             }
+             ThreadItem::Reasoning {
+-                summary, content, ..
++                summary,
++                content,
++                id,
++                ..
+             } => {
+                 if self.show_agent_reasoning
+                     && let Some(text) =
+                         reasoning_text(&summary, &content, self.show_raw_agent_reasoning)
+                     && !text.trim().is_empty()
+                 {
+-                    eprintln!("{}", text.style(self.dimmed));
++                    eprintln!("{}", self.format_msg_prefix(MsgType::Reasoning, None, Some(&id)));
++                    eprintln!("{}", text);
+                 }
+             }
+             ThreadItem::CommandExecution {
+@@ -123,38 +265,31 @@ impl EventProcessorWithHumanOutput {
+                 exit_code,
+                 status,
+                 duration_ms,
++                id,
+                 ..
+             } => {
++                self.command_exec_count += 1;
+                 let duration_suffix = duration_ms
+                     .map(|duration_ms| format!(" in {duration_ms}ms"))
+                     .unwrap_or_default();
+-                match status {
+-                    CommandExecutionStatus::Completed => {
+-                        eprintln!(
+-                            "{}",
+-                            format!(" succeeded{duration_suffix}:").style(self.green)
+-                        );
+-                    }
++                let status_label = match status {
++                    CommandExecutionStatus::Completed => format!(" succeeded{}", duration_suffix),
+                     CommandExecutionStatus::Failed => {
+                         let exit_code = exit_code.unwrap_or(1);
+-                        eprintln!(
+-                            "{}",
+-                            format!(" exited {exit_code}{duration_suffix}:").style(self.red)
+-                        );
++                        format!(" exited {exit_code}{}", duration_suffix)
+                     }
+                     CommandExecutionStatus::Declined => {
+-                        eprintln!(
+-                            "{}",
+-                            format!(" declined{duration_suffix}:").style(self.yellow)
+-                        );
++                        format!(" declined{}", duration_suffix)
+                     }
+                     CommandExecutionStatus::InProgress => {
+-                        eprintln!(
+-                            "{}",
+-                            format!(" in progress{duration_suffix}:").style(self.dimmed)
+-                        );
++                        format!(" in progress{}", duration_suffix)
+                     }
+-                }
++                };
++                eprintln!(
++                    "{}: {}",
++                    self.format_msg_prefix(MsgType::Exec, Some(MsgPhase::Resp), Some(&id)),
++                    status_label.style(self.green)
++                );
+                 if let Some(output) = aggregated_output
+                     && !output.trim().is_empty()
+                 {
+@@ -162,15 +297,20 @@ impl EventProcessorWithHumanOutput {
+                 }
+             }
+             ThreadItem::FileChange {
+-                changes, status, ..
++                changes, status, id, ..
+             } => {
++                self.file_change_count += 1;
+                 let status_text = match status {
+                     PatchApplyStatus::Completed => "completed",
+                     PatchApplyStatus::Failed => "failed",
+                     PatchApplyStatus::Declined => "declined",
+                     PatchApplyStatus::InProgress => "in_progress",
+                 };
+-                eprintln!("{} {}", "patch:".style(self.bold), status_text);
++                eprintln!(
++                    "{} {}",
++                    self.format_msg_prefix(MsgType::FileChange, Some(MsgPhase::Resp), Some(&id)),
++                    status_text
++                );
+                 for change in changes {
+                     eprintln!("{}", change.path.style(self.dimmed));
+                 }
+@@ -180,27 +320,34 @@ impl EventProcessorWithHumanOutput {
+                 tool,
+                 status,
+                 error,
++                id,
+                 ..
+             } => {
++                self.mcp_tool_call_count += 1;
+                 let status_text = match status {
+                     McpToolCallStatus::Completed => "completed".style(self.green),
+                     McpToolCallStatus::Failed => "failed".style(self.red),
+                     McpToolCallStatus::InProgress => "in_progress".style(self.dimmed),
+                 };
+                 eprintln!(
+-                    "{} {} {}",
+-                    "mcp:".style(self.bold),
++                    "{} {} ({status_text})",
++                    self.format_msg_prefix(MsgType::Mcp, Some(MsgPhase::Resp), Some(&id)),
+                     format!("{server}/{tool}").style(self.cyan),
+-                    format!("({status_text})").style(self.dimmed)
+                 );
+                 if let Some(error) = error {
+                     eprintln!("{}", error.message.style(self.red));
+                 }
+             }
+-            ThreadItem::WebSearch { query, .. } => {
+-                eprintln!("{} {}", "web search:".style(self.bold), query);
++            ThreadItem::WebSearch { query, id, .. } => {
++                self.web_search_count += 1;
++                eprintln!(
++                    "{} {}",
++                    self.format_msg_prefix(MsgType::WebSearch, Some(MsgPhase::Resp), Some(&id)),
++                    query
++                );
+             }
+-            ThreadItem::ContextCompaction { .. } => {
++            ThreadItem::ContextCompaction { id, .. } => {
++                eprintln!("{}", self.format_msg_prefix(MsgType::Info, None, Some(&id)));
+                 eprintln!("{}", "context compacted".style(self.dimmed));
+             }
+             _ => {}
+@@ -221,7 +368,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
+             eprintln!("{} {}", format!("{key}:").style(self.bold), value);
+         }
+         eprintln!("--------");
+-        eprintln!("{}\n{}", "user".style(self.cyan), prompt);
++        eprintln!("{}", self.format_msg_prefix(MsgType::User, None, None));
++        eprintln!("{}", prompt);
+     }
+ 
+     fn process_server_notification(&mut self, notification: ServerNotification) -> CodexStatus {
+@@ -233,7 +381,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
+                     .unwrap_or_default();
+                 eprintln!(
+                     "{} {}{}",
+-                    "warning:".style(self.yellow).style(self.bold),
++                    self.format_msg_prefix(MsgType::Warning, None, None),
+                     notification.summary,
+                     details
+                 );
+@@ -242,7 +390,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
+             ServerNotification::Error(notification) => {
+                 eprintln!(
+                     "{} {}",
+-                    "ERROR:".style(self.red).style(self.bold),
++                    self.format_msg_prefix(MsgType::Error, None, None),
+                     notification.error
+                 );
+                 CodexStatus::Running
+@@ -250,7 +398,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
+             ServerNotification::DeprecationNotice(notification) => {
+                 eprintln!(
+                     "{} {}",
+-                    "deprecated:".style(self.yellow).style(self.bold),
++                    self.format_msg_prefix(MsgType::Warning, None, None),
+                     notification.summary
+                 );
+                 if let Some(details) = notification.details {
+@@ -259,6 +407,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
+                 CodexStatus::Running
+             }
+             ServerNotification::HookStarted(notification) => {
++                eprintln!("{}", self.format_msg_prefix(MsgType::Info, None, None));
+                 eprintln!(
+                     "{} {}",
+                     "hook:".style(self.bold),
+@@ -267,6 +416,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
+                 CodexStatus::Running
+             }
+             ServerNotification::HookCompleted(notification) => {
++                eprintln!("{}", self.format_msg_prefix(MsgType::Info, None, None));
+                 eprintln!(
+                     "{} {} {:?}",
+                     "hook:".style(self.bold),
+@@ -286,7 +436,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
+             ServerNotification::ModelRerouted(notification) => {
+                 eprintln!(
+                     "{} {} -> {}",
+-                    "model rerouted:".style(self.yellow).style(self.bold),
++                    self.format_msg_prefix(MsgType::Warning, None, None),
+                     notification.from_model,
+                     notification.to_model
+                 );
+@@ -297,6 +447,10 @@ impl EventProcessor for EventProcessorWithHumanOutput {
+                 self.last_total_token_usage = Some(notification.token_usage);
+                 CodexStatus::Running
+             }
++            ServerNotification::TurnStarted(_) => {
++                self.turn_start_time = Some(SystemTime::now());
++                CodexStatus::Running
++            }
+             ServerNotification::TurnCompleted(notification) => match notification.turn.status {
+                 TurnStatus::Completed => {
+                     let rendered_message = self
+@@ -318,7 +472,11 @@ impl EventProcessor for EventProcessorWithHumanOutput {
+                     self.final_message_rendered = false;
+                     self.emit_final_message_on_shutdown = false;
+                     if let Some(error) = notification.turn.error {
+-                        eprintln!("{} {}", "ERROR:".style(self.red).style(self.bold), error);
++                        eprintln!(
++                            "{} {}",
++                            self.format_msg_prefix(MsgType::Error, None, None),
++                            error
++                        );
+                     }
+                     CodexStatus::InitiateShutdown
+                 }
+@@ -326,6 +484,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
+                     self.final_message = None;
+                     self.final_message_rendered = false;
+                     self.emit_final_message_on_shutdown = false;
++                    eprintln!("{}", self.format_msg_prefix(MsgType::Info, None, None));
+                     eprintln!("{}", "turn interrupted".style(self.dimmed));
+                     CodexStatus::InitiateShutdown
+                 }
+@@ -360,7 +519,50 @@ impl EventProcessor for EventProcessorWithHumanOutput {
+                 }
+                 CodexStatus::Running
+             }
+-            ServerNotification::TurnStarted(_) => CodexStatus::Running,
++            ServerNotification::ReasoningSummaryTextDelta(notification) => {
++                if self.show_agent_reasoning && !notification.delta.is_empty() {
++                    if self.current_reasoning_item_id.as_deref()
++                        != Some(notification.item_id.as_str())
++                    {
++                        self.current_reasoning_item_id = Some(notification.item_id.clone());
++                        eprintln!(
++                            "{}",
++                            self.format_msg_prefix(MsgType::Reasoning, None, Some(&notification.item_id))
++                        );
++                    }
++                    eprint!("{}", notification.delta);
++                    let _ = std::io::stderr().flush();
++                }
++                CodexStatus::Running
++            }
++            ServerNotification::ReasoningTextDelta(notification) => {
++                if self.show_agent_reasoning
++                    && self.show_raw_agent_reasoning
++                    && !notification.delta.is_empty()
++                {
++                    if self.current_reasoning_item_id.as_deref()
++                        != Some(notification.item_id.as_str())
++                    {
++                        self.current_reasoning_item_id = Some(notification.item_id.clone());
++                        eprintln!(
++                            "{}",
++                            self.format_msg_prefix(MsgType::Reasoning, None, Some(&notification.item_id))
++                        );
++                    }
++                    eprint!("{}", notification.delta);
++                    let _ = std::io::stderr().flush();
++                }
++                CodexStatus::Running
++            }
++            ServerNotification::ReasoningSummaryPartAdded(_) => {
++                if self.show_agent_reasoning {
++                    // End the current streaming section so subsequent deltas
++                    // start a fresh block with a new prefix header.
++                    eprintln!();
++                    self.current_reasoning_item_id = None;
++                }
++                CodexStatus::Running
++            }
+             _ => CodexStatus::Running,
+         }
+     }
+@@ -368,7 +570,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
+     fn process_warning(&mut self, message: String) -> CodexStatus {
+         eprintln!(
+             "{} {message}",
+-            "warning:".style(self.yellow).style(self.bold)
++            self.format_msg_prefix(MsgType::Warning, None, None),
+         );
+         CodexStatus::Running
+     }
+@@ -380,12 +582,55 @@ impl EventProcessor for EventProcessorWithHumanOutput {
+             handle_last_message(self.final_message.as_deref(), path);
+         }
+ 
++        // Compute wall-clock duration for this turn (fallback to 0 when no turn
++        // start was recorded, which can happen for empty sessions).
++        let elapsed_secs = self
++            .turn_start_time
++            .and_then(|t| t.elapsed().ok())
++            .map(|d| d.as_secs_f64())
++            .unwrap_or(0.0);
++
++        // Aggregate tool-call counts so the user can see how busy the turn was
++        // at a glance, broken down by category (shell vs MCP vs web search).
++        let total_tool_calls = self.command_exec_count
++            + self.mcp_tool_call_count
++            + self.collab_tool_call_count
++            + self.web_search_count;
++
++        eprintln!("{}", self.format_msg_prefix(MsgType::Stats, None, None));
++        eprintln!("  duration:      {}", format_duration(elapsed_secs));
++        eprintln!("  tool calls:    {} (shell: {}, mcp: {}, collab: {}, web_search: {})",
++            total_tool_calls,
++            self.command_exec_count,
++            self.mcp_tool_call_count,
++            self.collab_tool_call_count,
++            self.web_search_count,
++        );
++        eprintln!("  file changes:  {}", self.file_change_count);
++
+         if let Some(usage) = &self.last_total_token_usage {
+-            eprintln!(
+-                "{}\n{}",
+-                "tokens used".style(self.dimmed),
+-                format_with_separators(blended_total(usage))
++            let total = usage.total.total_tokens;
++            let input = usage.total.input_tokens;
++            let output = usage.total.output_tokens;
++            let cached = usage.total.cached_input_tokens;
++            let reasoning = usage.total.reasoning_output_tokens;
++
++            eprintln!("  tokens used:   {} (input: {}, cached: {}, output: {}, reasoning: {})",
++                format_with_separators(total as i64),
++                format_with_separators(input as i64),
++                format_with_separators(cached as i64),
++                format_with_separators(output as i64),
++                format_with_separators(reasoning as i64)
+             );
++
++            // Calculate throughput if we have timing data
++            if elapsed_secs > 0.0 {
++                let prefill_rate = (input - cached) as f64 / elapsed_secs;
++                let decode_rate = (output + reasoning) as f64 / elapsed_secs;
++                eprintln!("  throughput:    prefill {:.0} tok/s, decode {:.0} tok/s",
++                    prefill_rate, decode_rate
++                );
++            }
+         }
+ 
+         #[allow(clippy::print_stdout)]
+@@ -407,15 +652,36 @@ impl EventProcessor for EventProcessorWithHumanOutput {
+             std::io::stderr().is_terminal(),
+         ) && let Some(message) = self.final_message.as_deref()
+         {
+-            eprintln!(
+-                "{}\n{}",
+-                "codex".style(self.italic).style(self.magenta),
+-                message
+-            );
++            eprintln!("{}", message);
+         }
+     }
+ }
+ 
++/// Render a wall-clock duration as a human-readable string, picking the
++/// largest unit that keeps the leading value non-zero.
++fn format_duration(secs: f64) -> String {
++    if !secs.is_finite() || secs < 0.0 {
++        return "unknown".to_string();
++    }
++    let total_ms = (secs * 1000.0).round() as u64;
++    if total_ms < 1000 {
++        return format!("{total_ms}ms");
++    }
++    let total_secs = total_ms / 1000;
++    if total_secs < 60 {
++        let ms = total_ms % 1000;
++        return format!("{}.{:03}s", total_secs, ms);
++    }
++    let minutes = total_secs / 60;
++    let rem_secs = total_secs % 60;
++    if minutes < 60 {
++        return format!("{minutes}m {rem_secs}s");
++    }
++    let hours = minutes / 60;
++    let rem_minutes = minutes % 60;
++    format!("{hours}h {rem_minutes}m {rem_secs}s")
++}
++
+ fn config_summary_entries(
+     config: &Config,
+     session_configured_event: &SessionConfiguredEvent,
+@@ -497,12 +763,6 @@ fn final_message_from_turn_items(items: &[ThreadItem]) -> Option<String> {
+         })
+ }
+ 
+-fn blended_total(usage: &ThreadTokenUsage) -> i64 {
+-    let cached_input = usage.total.cached_input_tokens.max(0);
+-    let non_cached_input = (usage.total.input_tokens - cached_input).max(0);
+-    (non_cached_input + usage.total.output_tokens.max(0)).max(0)
+-}
+-
+ fn should_print_final_message_to_stdout(
+     final_message: Option<&str>,
+     stdout_is_terminal: bool,
+diff --git a/codex-rs/exec/src/event_processor_with_human_output_tests.rs b/codex-rs/exec/src/event_processor_with_human_output_tests.rs
+index 1e900f2b6..8357eeddf 100644
+--- a/codex-rs/exec/src/event_processor_with_human_output_tests.rs
++++ b/codex-rs/exec/src/event_processor_with_human_output_tests.rs
+@@ -302,6 +302,7 @@ fn turn_completed_recovers_final_message_from_turn_items() {
+         final_message_rendered: false,
+         emit_final_message_on_shutdown: false,
+         last_total_token_usage: None,
++        turn_start_time: None,
+     };
+ 
+     let status = processor.process_server_notification(ServerNotification::TurnCompleted(
+@@ -350,6 +351,7 @@ fn turn_completed_overwrites_stale_final_message_from_turn_items() {
+         final_message_rendered: true,
+         emit_final_message_on_shutdown: false,
+         last_total_token_usage: None,
++        turn_start_time: None,
+     };
+ 
+     let status = processor.process_server_notification(ServerNotification::TurnCompleted(
+@@ -399,6 +401,7 @@ fn turn_completed_preserves_streamed_final_message_when_turn_items_are_empty() {
+         final_message_rendered: false,
+         emit_final_message_on_shutdown: false,
+         last_total_token_usage: None,
++        turn_start_time: None,
+     };
+ 
+     let status = processor.process_server_notification(ServerNotification::TurnCompleted(
+@@ -443,6 +446,7 @@ fn turn_failed_clears_stale_final_message() {
+         final_message_rendered: true,
+         emit_final_message_on_shutdown: true,
+         last_total_token_usage: None,
++        turn_start_time: None,
+     };
+ 
+     let status = processor.process_server_notification(ServerNotification::TurnCompleted(
+@@ -488,6 +492,7 @@ fn turn_interrupted_clears_stale_final_message() {
+         final_message_rendered: true,
+         emit_final_message_on_shutdown: true,
+         last_total_token_usage: None,
++        turn_start_time: None,
+     };
+ 
+     let status = processor.process_server_notification(ServerNotification::TurnCompleted(
+diff --git a/codex-rs/models-manager/models.json b/codex-rs/models-manager/models.json
+index 213fdcf6c..509316573 100644
+--- a/codex-rs/models-manager/models.json
++++ b/codex-rs/models-manager/models.json
+@@ -1,6 +1,95 @@
+ {
+   "models": [
+-    { 
++    {
++      "prefer_websockets": true,
++      "support_verbosity": true,
++      "default_verbosity": "low",
++      "apply_patch_tool_type": "freeform",
++      "web_search_tool_type": "text_and_image",
++      "input_modalities": [
++        "text",
++        "image"
++      ],
++      "supports_image_detail_original": true,
++      "truncation_policy": {
++        "mode": "tokens",
++        "limit": 10000
++      },
++      "supports_parallel_tool_calls": true,
++      "context_window": 272000,
++      "max_context_window": 1000000,
++      "auto_compact_token_limit": null,
++      "reasoning_summary_format": "experimental",
++      "default_reasoning_summary": "none",
++      "slug": "coding-plan",
++      "display_name": "Coding-Plan",
++      "description": "Advanced coding model optimized for planning and architecture tasks.",
++      "default_reasoning_level": "medium",
++      "supported_reasoning_levels": [
++        {
++          "effort": "low",
++          "description": "Fast responses with lighter reasoning"
++        },
++        {
++          "effort": "medium",
++          "description": "Balances speed and reasoning depth for everyday tasks"
++        },
++        {
++          "effort": "high",
++          "description": "Greater reasoning depth for complex problems"
++        },
++        {
++          "effort": "xhigh",
++          "description": "Extra high reasoning depth for complex problems"
++        }
++      ],
++      "shell_type": "shell_command",
++      "visibility": "list",
++      "minimal_client_version": "0.98.0",
++      "supported_in_api": true,
++      "availability_nux": null,
++      "upgrade": null,
++      "priority": 2,
++      "base_instructions": "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.\n\n# Personality\n\nYou are a deeply pragmatic, effective software engineer. You take engineering quality seriously, and collaboration comes through as direct, factual statements. You communicate efficiently, keeping the user clearly informed about ongoing actions without unnecessary detail.\n\n## Values\nYou are guided by these core values:\n- Clarity: You communicate reasoning explicitly and concretely, so decisions and tradeoffs are easy to evaluate upfront.\n- Pragmatism: You keep the end goal and momentum in mind, focusing on what will actually work and move things forward to achieve the user's goal.\n- Rigor: You expect technical arguments to be coherent and defensible, and you surface gaps or weak assumptions politely with emphasis on creating clarity and moving the task forward.\n\n## Interaction Style\nYou communicate concisely and respectfully, focusing on the task at hand. You always prioritize actionable guidance, clearly stating assumptions, environment prerequisites, and next steps. Unless explicitly asked, you avoid excessively verbose explanations about your work.\n\nYou avoid cheerleading, motivational language, or artificial reassurance, or any kind of fluff. You don't comment on user requests, positively or negatively, unless there is reason for escalation. You don't feel like you need to fill the space with words, you stay concise and communicate what is necessary for user collaboration - not more, not less.\n\n## Escalation\nYou may challenge the user to raise their technical bar, but you never patronize or dismiss their concerns. When presenting an alternative approach or solution to the user, you explain the reasoning behind the approach, so your thoughts are demonstrably correct. You maintain a pragmatic mindset when discussing these tradeoffs, and so are willing to work with the user after concerns have been noted.\n\n# General\nAs an expert coding agent, your primary focus is writing code, answering questions, and helping the user complete their task in the current environment. You build context by examining the codebase first without making assumptions or jumping to conclusions. You think through the nuances of the code you encounter, and embody the mentality of a skilled senior software engineer.\n\n- When searching for text or files, prefer using `rg` or `rg --files` respectively because `rg` is much faster than alternatives like `grep`. (If the `rg` command is not found, then use alternatives.)\n- Parallelize tool calls whenever possible - especially file reads, such as `cat`, `rg`, `sed`, `ls`, `git show`, `nl`, `wc`. Use `multi_tool_use.parallel` to parallelize tool calls and only this. Never chain together bash commands with separators like `echo \"====\";` as this renders to the user poorly.\n\n## Editing constraints\n\n- Default to ASCII when editing or creating files. Only introduce non-ASCII or other Unicode characters when there is a clear justification and the file already uses them.\n- Add succinct code comments that explain what is going on if code is not self-explanatory. You should not add comments like \"Assigns the value to the variable\", but a brief comment might be useful ahead of a complex code block that the user would otherwise have to spend time parsing out. Usage of these comments should be rare.\n- Always use apply_patch for manual code edits. Do not use cat or any other commands when creating or editing files. Formatting commands or bulk edits don't need to be done with apply_patch.\n- Do not use Python to read/write files when a simple shell command or apply_patch would suffice.\n- You may be in a dirty git worktree.\n  * NEVER revert existing changes you did not make unless explicitly requested, since these changes were made by the user.\n  * If asked to make a commit or code edits and there are unrelated changes to your work or changes that you didn't make in those files, don't revert those changes.\n  * If the changes are in files you've touched recently, you should read carefully and understand how you can work with the changes rather than reverting them.\n  * If the changes are in unrelated files, just ignore them and don't revert them.\n- Do not amend a commit unless explicitly requested to do so.\n- While you are working, you might notice unexpected changes that you didn't make. It's likely the user made them, or were autogenerated. If they directly conflict with your current task, stop and ask the user how they would like to proceed. Otherwise, focus on the task at hand.\n- **NEVER** use destructive commands like `git reset --hard` or `git checkout --` unless specifically requested or approved by the user.\n- You struggle using the git interactive console. **ALWAYS** prefer using non-interactive git commands.\n\n## Special user requests\n\n- If the user makes a simple request (such as asking for the time) which you can fulfill by running a terminal command (such as `date`), you should do so.\n- If the user asks for a \"review\", default to a code review mindset: prioritise identifying bugs, risks, behavioural regressions, and missing tests. Findings must be the primary focus of the response - keep summaries or overviews brief and only after enumerating the issues. Present findings first (ordered by severity with file/line references), follow with open questions or assumptions, and offer a change-summary only as a secondary detail. If no findings are discovered, state that explicitly and mention any residual risks or testing gaps.\n\n## Autonomy and persistence\nPersist until the task is fully handled end-to-end within the current turn whenever feasible: do not stop at analysis or partial fixes; carry changes through implementation, verification, and a clear explanation of outcomes unless the user explicitly pauses or redirects you.\n\nUnless the user explicitly asks for a plan, asks a question about the code, is brainstorming potential solutions, or some other intent that makes it clear that code should not be written, assume the user wants you to make code changes or run tools to solve the user's problem. In these cases, it's bad to output your proposed solution in a message, you should go ahead and actually implement the change. If you encounter challenges or blockers, you should attempt to resolve them yourself.\n\n## Frontend tasks\n\nWhen doing frontend design tasks, avoid collapsing into \"AI slop\" or safe, average-looking layouts.\nAim for interfaces that feel intentional, bold, and a bit surprising.\n- Typography: Use expressive, purposeful fonts and avoid default stacks (Inter, Roboto, Arial, system).\n- Color & Look: Choose a clear visual direction; define CSS variables; avoid purple-on-white defaults. No purple bias or dark mode bias.\n- Motion: Use a few meaningful animations (page-load, staggered reveals) instead of generic micro-motions.\n- Background: Don't rely on flat, single-color backgrounds; use gradients, shapes, or subtle patterns to build atmosphere.\n- Ensure the page loads properly on both desktop and mobile\n- For React code, prefer modern patterns including useEffectEvent, startTransition, and useDeferredValue when appropriate if used by the team. Do not add useMemo/useCallback by default unless already used; follow the repo's React Compiler guidance.\n- Overall: Avoid boilerplate layouts and interchangeable UI patterns. Vary themes, type families, and visual languages across outputs.\n\nException: If working within an existing website or design system, preserve the established patterns, structure, and visual language.\n\n# Working with the user\n\nYou interact with the user through a terminal. You have 2 ways of communicating with the users:\n- Share intermediary updates in `commentary` channel. \n- After you have completed all your work, send a message to the `final` channel.\nYou are producing plain text that will later be styled by the program you run in. Formatting should make results easy to scan, but not feel mechanical. Use judgment to decide how much structure adds value. Follow the formatting rules exactly.\n\n## Formatting rules\n\n- You may format with GitHub-flavored Markdown.\n- Structure your answer if necessary, the complexity of the answer should match the task. If the task is simple, your answer should be a one-liner. Order sections from general to specific to supporting.\n- Never use nested bullets. Keep lists flat (single level). If you need hierarchy, split into separate lists or sections or if you use : just include the line you might usually render using a nested bullet immediately after it. For numbered lists, only use the `1. 2. 3.` style markers (with a period), never `1)`.\n- Headers are optional, only use them when you think they are necessary. If you do use them, use short Title Case (1-3 words) wrapped in **…**. Don't add a blank line.\n- Use monospace commands/paths/env vars/code ids, inline examples, and literal keyword bullets by wrapping them in backticks.\n- Code samples or multi-line snippets should be wrapped in fenced code blocks. Include an info string as often as possible.\n- When referencing a real local file, prefer a clickable markdown link.\n  * Clickable file links should look like [app.py](/abs/path/app.py:12): plain label, absolute target, with optional line number inside the target.\n  * If a file path has spaces, wrap the target in angle brackets: [My Report.md](</abs/path/My Project/My Report.md:3>).\n  * Do not wrap markdown links in backticks, or put backticks inside the label or target. This confuses the markdown renderer.\n  * Do not use URIs like file://, vscode://, or https:// for file links.\n  * Do not provide ranges of lines.\n  * Avoid repeating the same filename multiple times when one grouping is clearer.\n- Don’t use emojis or em dashes unless explicitly instructed.\n\n## Final answer instructions\n\nAlways favor conciseness in your final answer - you should usually avoid long-winded explanations and focus only on the most important details. For casual chit-chat, just chat. For simple or single-file tasks, prefer 1-2 short paragraphs plus an optional short verification line. Do not default to bullets. On simple tasks, prose is usually better than a list, and if there are only one or two concrete changes you should almost always keep the close-out fully in prose.\n\nOn larger tasks, use at most 2-3 high-level sections when helpful. Each section can be a short paragraph or a few flat bullets. Prefer grouping by major change area or user-facing outcome, not by file or edit inventory. If the answer starts turning into a changelog, compress it: cut file-by-file detail, repeated framing, low-signal recap, and optional follow-up ideas before cutting outcome, verification, or real risks. Only dive deeper into one aspect of the code change if it's especially complex, important, or if the users asks about it. This also holds true for PR explanations, codebase walkthroughs, or architectural decisions: provide a high-level walkthrough unless specifically asked and cap answers at 2-3 sections.\n\nRequirements for your final answer:\n- Prefer short paragraphs by default.\n- When explaining something, optimize for fast, high-level comprehension rather than completeness-by-default.\n- Use lists only when the content is inherently list-shaped: enumerating distinct items, steps, options, categories, comparisons, ideas. Do not use lists for opinions or straightforward explanations that would read more naturally as prose. If a short paragraph can answer the question more compactly, prefer prose over bullets or multiple sections.\n- Do not turn simple explanations into outlines or taxonomies unless the user asks for depth. If a list is used, each bullet should be a complete standalone point.\n- Do not begin responses with conversational interjections or meta commentary. Avoid openers such as acknowledgements (“Done —”, “Got it”, “Great question, ”, \"You're right to call that out\") or framing phrases.\n- The user does not see command execution outputs. When asked to show the output of a command (e.g. `git show`), relay the important details in your answer or summarize the key lines so the user understands the result.\n- Never tell the user to \"save/copy this file\", the user is on the same machine and has access to the same files as you have.\n- If the user asks for a code explanation, include code references as appropriate.\n- If you weren't able to do something, for example run tests, tell the user.\n- Never use nested bullets. Keep lists flat (single level). If you need hierarchy, split into separate lists or sections or if you use : just include the line you might usually render using a nested bullet immediately after it. For numbered lists, only use the `1. 2. 3.` style markers (with a period), never `1)`.\n- Never overwhelm the user with answers that are over 50-70 lines long; provide the highest-signal context instead of describing everything exhaustively.\n\n## Intermediary updates \n\n- Intermediary updates go to the `commentary` channel.\n- User updates are short updates while you are working, they are NOT final answers.\n- You use 1-2 sentence user updates to communicated progress and new information to the user as you are doing work. \n- Do not begin responses with conversational interjections or meta commentary. Avoid openers such as acknowledgements (“Done —”, “Got it”, “Great question, ”) or framing phrases.\n- Before exploring or doing substantial work, you start with a user update acknowledging the request and explaining your first step. You should include your understanding of the user request and explain what you will do. Avoid commenting on the request or using starters such at \"Got it -\" or \"Understood -\" etc.\n- You provide user updates frequently, every 30s.\n- When exploring, e.g. searching, reading files you provide user updates as you go, explaining what context you are gathering and what you've learned. Vary your sentence structure when providing these updates to avoid sounding repetitive - in particular, don't start each sentence the same way.\n- When working for a while, keep updates informative and varied, but stay concise.\n- After you have sufficient context, and the work is substantial you provide a longer plan (this is the only user update that may be longer than 2 sentences and can contain formatting).\n- Before performing file edits of any kind, you provide updates explaining what edits you are making.\n- As you are thinking, you very frequently provide updates even if not taking any actions, informing the user of your progress. You interrupt your thinking and send multiple updates in a row if thinking for more than 100 words.\n- Tone of your updates MUST match your personality.\n",
++      "model_messages": {
++        "instructions_template": "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.\n\n{{ personality }}\n\n# General\nAs an expert coding agent, your primary focus is writing code, answering questions, and helping the user complete their task in the current environment. You build context by examining the codebase first without making assumptions or jumping to conclusions. You think through the nuances of the code you encounter, and embody the mentality of a skilled senior software engineer.\n\n- When searching for text or files, prefer using `rg` or `rg --files` respectively because `rg` is much faster than alternatives like `grep`. (If the `rg` command is not found, then use alternatives.)\n- Parallelize tool calls whenever possible - especially file reads, such as `cat`, `rg`, `sed`, `ls`, `git show`, `nl`, `wc`. Use `multi_tool_use.parallel` to parallelize tool calls and only this. Never chain together bash commands with separators like `echo \"====\";` as this renders to the user poorly.\n\n## Editing constraints\n\n- Default to ASCII when editing or creating files. Only introduce non-ASCII or other Unicode characters when there is a clear justification and the file already uses them.\n- Add succinct code comments that explain what is going on if code is not self-explanatory. You should not add comments like \"Assigns the value to the variable\", but a brief comment might be useful ahead of a complex code block that the user would otherwise have to spend time parsing out. Usage of these comments should be rare.\n- Always use apply_patch for manual code edits. Do not use cat or any other commands when creating or editing files. Formatting commands or bulk edits don't need to be done with apply_patch.\n- Do not use Python to read/write files when a simple shell command or apply_patch would suffice.\n- You may be in a dirty git worktree.\n  * NEVER revert existing changes you did not make unless explicitly requested, since these changes were made by the user.\n  * If asked to make a commit or code edits and there are unrelated changes to your work or changes that you didn't make in those files, don't revert those changes.\n  * If the changes are in files you've touched recently, you should read carefully and understand how you can work with the changes rather than reverting them.\n  * If the changes are in unrelated files, just ignore them and don't revert them.\n- Do not amend a commit unless explicitly requested to do so.\n- While you are working, you might notice unexpected changes that you didn't make. It's likely the user made them, or were autogenerated. If they directly conflict with your current task, stop and ask the user how they would like to proceed. Otherwise, focus on the task at hand.\n- **NEVER** use destructive commands like `git reset --hard` or `git checkout --` unless specifically requested or approved by the user.\n- You struggle using the git interactive console. **ALWAYS** prefer using non-interactive git commands.\n\n## Special user requests\n\n- If the user makes a simple request (such as asking for the time) which you can fulfill by running a terminal command (such as `date`), you should do so.\n- If the user asks for a \"review\", default to a code review mindset: prioritise identifying bugs, risks, behavioural regressions, and missing tests. Findings must be the primary focus of the response - keep summaries or overviews brief and only after enumerating the issues. Present findings first (ordered by severity with file/line references), follow with open questions or assumptions, and offer a change-summary only as a secondary detail. If no findings are discovered, state that explicitly and mention any residual risks or testing gaps.\n\n## Autonomy and persistence\nPersist until the task is fully handled end-to-end within the current turn whenever feasible: do not stop at analysis or partial fixes; carry changes through implementation, verification, and a clear explanation of outcomes unless the user explicitly pauses or redirects you.\n\nUnless the user explicitly asks for a plan, asks a question about the code, is brainstorming potential solutions, or some other intent that makes it clear that code should not be written, assume the user wants you to make code changes or run tools to solve the user's problem. In these cases, it's bad to output your proposed solution in a message, you should go ahead and actually implement the change. If you encounter challenges or blockers, you should attempt to resolve them yourself.\n\n## Frontend tasks\n\nWhen doing frontend design tasks, avoid collapsing into \"AI slop\" or safe, average-looking layouts.\nAim for interfaces that feel intentional, bold, and a bit surprising.\n- Typography: Use expressive, purposeful fonts and avoid default stacks (Inter, Roboto, Arial, system).\n- Color & Look: Choose a clear visual direction; define CSS variables; avoid purple-on-white defaults. No purple bias or dark mode bias.\n- Motion: Use a few meaningful animations (page-load, staggered reveals) instead of generic micro-motions.\n- Background: Don't rely on flat, single-color backgrounds; use gradients, shapes, or subtle patterns to build atmosphere.\n- Ensure the page loads properly on both desktop and mobile\n- For React code, prefer modern patterns including useEffectEvent, startTransition, and useDeferredValue when appropriate if used by the team. Do not add useMemo/useCallback by default unless already used; follow the repo's React Compiler guidance.\n- Overall: Avoid boilerplate layouts and interchangeable UI patterns. Vary themes, type families, and visual languages across outputs.\n\nException: If working within an existing website or design system, preserve the established patterns, structure, and visual language.\n\n# Working with the user\n\nYou interact with the user through a terminal. You have 2 ways of communicating with the users:\n- Share intermediary updates in `commentary` channel. \n- After you have completed all your work, send a message to the `final` channel.\nYou are producing plain text that will later be styled by the program you run in. Formatting should make results easy to scan, but not feel mechanical. Use judgment to decide how much structure adds value. Follow the formatting rules exactly.\n\n## Formatting rules\n\n- You may format with GitHub-flavored Markdown.\n- Structure your answer if necessary, the complexity of the answer should match the task. If the task is simple, your answer should be a one-liner. Order sections from general to specific to supporting.\n- Never use nested bullets. Keep lists flat (single level). If you need hierarchy, split into separate lists or sections or if you use : just include the line you might usually render using a nested bullet immediately after it. For numbered lists, only use the `1. 2. 3.` style markers (with a period), never `1)`.\n- Headers are optional, only use them when you think they are necessary. If you do use them, use short Title Case (1-3 words) wrapped in **…**. Don't add a blank line.\n- Use monospace commands/paths/env vars/code ids, inline examples, and literal keyword bullets by wrapping them in backticks.\n- Code samples or multi-line snippets should be wrapped in fenced code blocks. Include an info string as often as possible.\n- When referencing a real local file, prefer a clickable markdown link.\n  * Clickable file links should look like [app.py](/abs/path/app.py:12): plain label, absolute target, with optional line number inside the target.\n  * If a file path has spaces, wrap the target in angle brackets: [My Report.md](</abs/path/My Project/My Report.md:3>).\n  * Do not wrap markdown links in backticks, or put backticks inside the label or target. This confuses the markdown renderer.\n  * Do not use URIs like file://, vscode://, or https:// for file links.\n  * Do not provide ranges of lines.\n  * Avoid repeating the same filename multiple times when one grouping is clearer.\n- Don’t use emojis or em dashes unless explicitly instructed.\n\n## Final answer instructions\n\nAlways favor conciseness in your final answer - you should usually avoid long-winded explanations and focus only on the most important details. For casual chit-chat, just chat. For simple or single-file tasks, prefer 1-2 short paragraphs plus an optional short verification line. Do not default to bullets. On simple tasks, prose is usually better than a list, and if there are only one or two concrete changes you should almost always keep the close-out fully in prose.\n\nOn larger tasks, use at most 2-3 high-level sections when helpful. Each section can be a short paragraph or a few flat bullets. Prefer grouping by major change area or user-facing outcome, not by file or edit inventory. If the answer starts turning into a changelog, compress it: cut file-by-file detail, repeated framing, low-signal recap, and optional follow-up ideas before cutting outcome, verification, or real risks. Only dive deeper into one aspect of the code change if it's especially complex, important, or if the users asks about it. This also holds true for PR explanations, codebase walkthroughs, or architectural decisions: provide a high-level walkthrough unless specifically asked and cap answers at 2-3 sections.\n\nRequirements for your final answer:\n- Prefer short paragraphs by default.\n- When explaining something, optimize for fast, high-level comprehension rather than completeness-by-default.\n- Use lists only when the content is inherently list-shaped: enumerating distinct items, steps, options, categories, comparisons, ideas. Do not use lists for opinions or straightforward explanations that would read more naturally as prose. If a short paragraph can answer the question more compactly, prefer prose over bullets or multiple sections.\n- Do not turn simple explanations into outlines or taxonomies unless the user asks for depth. If a list is used, each bullet should be a complete standalone point.\n- Do not begin responses with conversational interjections or meta commentary. Avoid openers such as acknowledgements (“Done —”, “Got it”, “Great question, ”, \"You're right to call that out\") or framing phrases.\n- The user does not see command execution outputs. When asked to show the output of a command (e.g. `git show`), relay the important details in your answer or summarize the key lines so the user understands the result.\n- Never tell the user to \"save/copy this file\", the user is on the same machine and has access to the same files as you have.\n- If the user asks for a code explanation, include code references as appropriate.\n- If you weren't able to do something, for example run tests, tell the user.\n- Never use nested bullets. Keep lists flat (single level). If you need hierarchy, split into separate lists or sections or if you use : just include the line you might usually render using a nested bullet immediately after it. For numbered lists, only use the `1. 2. 3.` style markers (with a period), never `1)`.\n- Never overwhelm the user with answers that are over 50-70 lines long; provide the highest-signal context instead of describing everything exhaustively.\n\n## Intermediary updates \n\n- Intermediary updates go to the `commentary` channel.\n- User updates are short updates while you are working, they are NOT final answers.\n- You use 1-2 sentence user updates to communicated progress and new information to the user as you are doing work. \n- Do not begin responses with conversational interjections or meta commentary. Avoid openers such as acknowledgements (“Done —”, “Got it”, “Great question, ”) or framing phrases.\n- Before exploring or doing substantial work, you start with a user update acknowledging the request and explaining your first step. You should include your understanding of the user request and explain what you will do. Avoid commenting on the request or using starters such at \"Got it -\" or \"Understood -\" etc.\n- You provide user updates frequently, every 30s.\n- When exploring, e.g. searching, reading files you provide user updates as you go, explaining what context you are gathering and what you've learned. Vary your sentence structure when providing these updates to avoid sounding repetitive - in particular, don't start each sentence the same way.\n- When working for a while, keep updates informative and varied, but stay concise.\n- After you have sufficient context, and the work is substantial you provide a longer plan (this is the only user update that may be longer than 2 sentences and can contain formatting).\n- Before performing file edits of any kind, you provide updates explaining what edits you are making.\n- As you are thinking, you very frequently provide updates even if not taking any actions, informing the user of your progress. You interrupt your thinking and send multiple updates in a row if thinking for more than 100 words.\n- Tone of your updates MUST match your personality.\n",
++        "instructions_variables": {
++          "personality_default": "",
++          "personality_friendly": "# Personality\n\nYou optimize for team morale and being a supportive teammate as much as code quality.  You are consistent, reliable, and kind. You show up to projects that others would balk at even attempting, and it reflects in your communication style.\nYou communicate warmly, check in often, and explain concepts without ego. You excel at pairing, onboarding, and unblocking others. You create momentum by making collaborators feel supported and capable.\n\n## Values\nYou are guided by these core values:\n* Empathy: Interprets empathy as meeting people where they are - adjusting explanations, pacing, and tone to maximize understanding and confidence.\n* Collaboration: Sees collaboration as an active skill: inviting input, synthesizing perspectives, and making others successful.\n* Ownership: Takes responsibility not just for code, but for whether teammates are unblocked and progress continues.\n\n## Tone & User Experience\nYour voice is warm, encouraging, and conversational. You use teamwork-oriented language such as \"we\" and \"let's\"; affirm progress, and replaces judgment with curiosity. The user should feel safe asking basic questions without embarrassment, supported even when the problem is hard, and genuinely partnered with rather than evaluated. Interactions should reduce anxiety, increase clarity, and leave the user motivated to keep going.\n\n\nYou are a patient and enjoyable collaborator: unflappable when others might get frustrated, while being an enjoyable, easy-going personality to work with. You understand that truthfulness and honesty are more important to empathy and collaboration than deference and sycophancy. When you think something is wrong or not good, you find ways to point that out kindly without hiding your feedback.\n\nYou never make the user work for you. You can ask clarifying questions only when they are substantial. Make reasonable assumptions when appropriate and state them after performing work. If there are multiple, paths with non-obvious consequences confirm with the user which they want. Avoid open-ended questions, and prefer a list of options when possible.\n\n## Escalation\nYou escalate gently and deliberately when decisions have non-obvious consequences or hidden risk. Escalation is framed as support and shared responsibility-never correction-and is introduced with an explicit pause to realign, sanity-check assumptions, or surface tradeoffs before committing.\n",
++          "personality_pragmatic": "# Personality\n\nYou are a deeply pragmatic, effective software engineer. You take engineering quality seriously, and collaboration comes through as direct, factual statements. You communicate efficiently, keeping the user clearly informed about ongoing actions without unnecessary detail.\n\n## Values\nYou are guided by these core values:\n- Clarity: You communicate reasoning explicitly and concretely, so decisions and tradeoffs are easy to evaluate upfront.\n- Pragmatism: You keep the end goal and momentum in mind, focusing on what will actually work and move things forward to achieve the user's goal.\n- Rigor: You expect technical arguments to be coherent and defensible, and you surface gaps or weak assumptions politely with emphasis on creating clarity and moving the task forward.\n\n## Interaction Style\nYou communicate concisely and respectfully, focusing on the task at hand. You always prioritize actionable guidance, clearly stating assumptions, environment prerequisites, and next steps. Unless explicitly asked, you avoid excessively verbose explanations about your work.\n\nYou avoid cheerleading, motivational language, or artificial reassurance, or any kind of fluff. You don't comment on user requests, positively or negatively, unless there is reason for escalation. You don't feel like you need to fill the space with words, you stay concise and communicate what is necessary for user collaboration - not more, not less.\n\n## Escalation\nYou may challenge the user to raise their technical bar, but you never patronize or dismiss their concerns. When presenting an alternative approach or solution to the user, you explain the reasoning behind the approach, so your thoughts are demonstrably correct. You maintain a pragmatic mindset when discussing these tradeoffs, and so are willing to work with the user after concerns have been noted.\n"
++        }
++      },
++      "experimental_supported_tools": [],
++      "available_in_plans": [
++        "business",
++        "edu",
++        "education",
++        "enterprise",
++        "enterprise_cbp_usage_based",
++        "finserv",
++        "go",
++        "hc",
++        "plus",
++        "pro",
++        "prolite",
++        "quorum",
++        "self_serve_business_usage_based",
++        "team"
++      ],
++      "supports_search_tool": true,
++      "service_tiers": [
++        {
++          "id": "priority",
++          "name": "Fast",
++          "description": "1.5x speed, increased usage"
++        }
++      ],
++      "additional_speed_tiers": [
++        "fast"
++      ],
++      "supports_reasoning_summaries": true
++    },
++    {
+       "prefer_websockets": true,
+       "support_verbosity": true,
+       "default_verbosity": "low",
+@@ -513,4 +602,4 @@
+       "supports_reasoning_summaries": true
+     }
+   ]
+-}
++}
+\ No newline at end of file
+diff --git a/codex-rs/protocol/src/models.rs b/codex-rs/protocol/src/models.rs
+index 28a7d6522..7a994fbb6 100644
+--- a/codex-rs/protocol/src/models.rs
++++ b/codex-rs/protocol/src/models.rs
+@@ -19,6 +19,7 @@ use crate::permissions::FileSystemSandboxPolicy;
+ use crate::permissions::FileSystemSpecialPath;
+ use crate::permissions::NetworkSandboxPolicy;
+ use crate::protocol::SandboxPolicy;
++use crate::protocol::TokenUsage;
+ use crate::user_input::UserInput;
+ use codex_utils_absolute_path::AbsolutePathBuf;
+ use codex_utils_image::ImageProcessingError;
+@@ -902,6 +903,30 @@ pub enum ResponseItem {
+     Other,
+ }
+ 
++/// A complete response from the OpenAI Responses API (non-streaming response body).
++///
++/// This is used for deserializing the `response.completed` SSE event payload
++/// or any direct HTTP response from the Responses API.
++#[derive(Debug, Clone, Deserialize, Serialize)]
++pub struct ResponsesApiResponse {
++    pub id: String,
++    pub object: String,
++    pub created_at: u64,
++    pub model: String,
++    pub status: String,
++    pub output: Vec<ResponseItem>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub usage: Option<TokenUsage>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub error: Option<serde_json::Value>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub incomplete_details: Option<serde_json::Value>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub instructions: Option<String>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub metadata: Option<serde_json::Value>,
++}
++
+ pub const BASE_INSTRUCTIONS_DEFAULT: &str = include_str!("prompts/base_instructions/default.md");
+ 
+ /// Base instructions for the model in a thread. Corresponds to the `instructions` field in the ResponsesAPI.
+diff --git a/codex-rs/model-provider-info/src/lib.rs b/codex-rs/model-provider-info/src/lib.rs
+index 65f71851d..eb4029656 100644
+--- a/codex-rs/model-provider-info/src/lib.rs
++++ b/codex-rs/model-provider-info/src/lib.rs
+@@ -7,6 +7,7 @@
+ 
+ use codex_api::Provider as ApiProvider;
+ use codex_api::RetryConfig as ApiRetryConfig;
++use codex_api::WireApi as ApiWireApi;
+ use codex_api::is_azure_responses_provider;
+ use codex_app_server_protocol::AuthMode;
+ use codex_protocol::config_types::ModelProviderAuthInfo;
+@@ -42,7 +43,6 @@ pub const AMAZON_BEDROCK_DEFAULT_BASE_URL: &str =
+     "https://bedrock-mantle.us-east-1.api.aws/openai/v1";
+ const AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER: &str = "x-amzn-mantle-client-agent";
+ const AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_VALUE: &str = "codex";
+-const CHAT_WIRE_API_REMOVED_ERROR: &str = "`wire_api = \"chat\"` is no longer supported.\nHow to fix: set `wire_api = \"responses\"` in your provider config.\nMore info: https://github.com/openai/codex/discussions/7782";
+ pub const LEGACY_OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
+ pub const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no longer supported.\nHow to fix: replace `ollama-chat` with `ollama` in `model_provider`, `oss_provider`, or `--local-provider`.\nMore info: https://github.com/openai/codex/discussions/7782";
+ 
+@@ -53,12 +53,15 @@ pub enum WireApi {
+     /// The Responses API exposed by OpenAI at `/v1/responses`.
+     #[default]
+     Responses,
++    /// The Chat Completions API exposed by many OpenAI-compatible providers.
++    Chat,
+ }
+ 
+ impl fmt::Display for WireApi {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         let value = match self {
+             Self::Responses => "responses",
++            Self::Chat => "chat",
+         };
+         f.write_str(value)
+     }
+@@ -72,8 +75,11 @@ impl<'de> Deserialize<'de> for WireApi {
+         let value = String::deserialize(deserializer)?;
+         match value.as_str() {
+             "responses" => Ok(Self::Responses),
+-            "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
+-            _ => Err(serde::de::Error::unknown_variant(&value, &["responses"])),
++            "chat" => Ok(Self::Chat),
++            _ => Err(serde::de::Error::unknown_variant(
++                &value,
++                &["responses", "chat"],
++            )),
+         }
+     }
+ }
+@@ -260,6 +266,10 @@ impl ModelProviderInfo {
+             name: self.name.clone(),
+             base_url,
+             query_params: self.query_params.clone(),
++            wire: match self.wire_api {
++                WireApi::Responses => ApiWireApi::Responses,
++                WireApi::Chat => ApiWireApi::Chat,
++            },
+             headers,
+             retry,
+             stream_idle_timeout: self.stream_idle_timeout(),
+diff --git a/codex-rs/models-manager/models.json b/codex-rs/models-manager/models.json
+index 509316573..5dd5235dc 100644
+--- a/codex-rs/models-manager/models.json
++++ b/codex-rs/models-manager/models.json
+@@ -600,6 +600,54 @@
+       "service_tiers": [],
+       "additional_speed_tiers": [],
+       "supports_reasoning_summaries": true
++    },
++    {
++      "prefer_websockets": false,
++      "support_verbosity": false,
++      "default_verbosity": null,
++      "apply_patch_tool_type": "freeform",
++      "web_search_tool_type": "text_only",
++      "input_modalities": [
++        "text"
++      ],
++      "supports_image_detail_original": false,
++      "truncation_policy": {
++        "mode": "tokens",
++        "limit": 10000
++      },
++      "supports_parallel_tool_calls": true,
++      "context_window": 128000,
++      "max_context_window": 128000,
++      "auto_compact_token_limit": null,
++      "reasoning_summary_format": "experimental",
++      "default_reasoning_summary": "none",
++      "slug": "ark-code-latest",
++      "display_name": "ARK Code Latest",
++      "description": "Volcengine ARK coding model.",
++      "default_reasoning_level": null,
++      "supported_reasoning_levels": [],
++      "shell_type": "shell_command",
++      "visibility": "list",
++      "minimal_client_version": null,
++      "supported_in_api": false,
++      "availability_nux": null,
++      "upgrade": null,
++      "priority": 100,
++      "base_instructions": "You are a helpful coding assistant.",
++      "model_messages": {
++        "instructions_template": "You are a helpful coding assistant.",
++        "instructions_variables": {
++          "personality_default": "",
++          "personality_friendly": "",
++          "personality_pragmatic": ""
++        }
++      },
++      "experimental_supported_tools": [],
++      "available_in_plans": [],
++      "supports_search_tool": false,
++      "service_tiers": [],
++      "additional_speed_tiers": [],
++      "supports_reasoning_summaries": false
+     }
+   ]
+ }
+\ No newline at end of file

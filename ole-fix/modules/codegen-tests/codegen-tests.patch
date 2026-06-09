@@ -1,0 +1,403 @@
+--- /dev/null
++++ b/.gitmodules
+@@ -0,0 +1,2 @@
++[submodule "submodules/codex"]
++	url = git@github.com:oliveagle/codex.git
+--- /dev/null
++++ b/codex-rs/codegen-tests/Cargo.toml
+@@ -0,0 +1,25 @@
++[package]
++name = "codex-codegen-tests"
++version = "0.1.0"
++edition = "2024"
++publish = false
++
++[dependencies]
++# Math utilities for testing code generation
++num-traits = "0.2"
++
++[dev-dependencies]
++# Test dependencies
++criterion = "0.5"
++
++[[bin]]
++name = "math_demo"
++path = "src/main.rs"
++
++[[test]]
++name = "math_tests"
++path = "tests/math_tests.rs"
++
++[[bin]]
++name = "buggy_test"
++path = "src/buggy_test.rs"
+--- /dev/null
++++ b/codex-rs/codegen-tests/src/buggy_test.rs
+@@ -0,0 +1,93 @@
++// Buggy math test file
++//
++// This file intentionally contains bugs that should be fixed by codex-rs.
++// The bugs are:
++// 1. Off-by-one error in factorial
++// 2. Incorrect fibonacci base cases
++// 3. Division by zero not handled
++
++fn main() {
++    println!("Buggy Math Tests (INTENTIONALLY BUGGY - fix these with codex)");
++    println!("============================================================");
++
++    // Bug 1: Factorial with off-by-one error
++    println!("factorial(5) = {}", factorial(5)); // Should be 120
++    println!("factorial(0) = {}", factorial(0)); // Should be 1
++
++    // Bug 2: Fibonacci with incorrect base cases
++    println!("fibonacci(0) = {}", fibonacci(0)); // Should be 0
++    println!("fibonacci(1) = {}", fibonacci(1)); // Should be 1
++    println!("fibonacci(10) = {}", fibonacci(10)); // Should be 55
++
++    // Bug 3: Safe division not handling edge cases
++    println!("safe_divide(10, 2) = {:?}", safe_divide(10.0, 2.0)); // Should be Some(5.0)
++    println!("safe_divide(5, 0) = {:?}", safe_divide(5.0, 0.0)); // Should be None
++}
++
++// BUG: Off-by-one error - should be `n - 1` not `n - 2`
++fn factorial(n: u64) -> u64 {
++    if n == 0 || n == 1 {
++        1
++    } else {
++        n * factorial(n - 2)
++    }
++}
++
++// BUG: Fibonacci should return 0 for n=0 and 1 for n=1
++fn fibonacci(n: u64) -> u64 {
++    match n {
++        0 => 1,  // BUG: should be 0
++        1 => 0,  // BUG: should be 1
++        _ => fibonacci(n - 1) + fibonacci(n - 2),
++    }
++}
++
++// BUG: safe_divide returns Some for division by zero
++fn safe_divide(a: f64, b: f64) -> Option<f64> {
++    if b >= 0.0 {
++        // BUG: should check `b != 0.0`, not `b >= 0.0`
++        Some(a / b)
++    } else {
++        Some(a / b) // BUG: returns Some even for negative divisors
++    }
++}
++
++#[cfg(test)]
++mod buggy_tests {
++    use super::*;
++
++    #[test]
++    fn test_factorial_basic() {
++        assert_eq!(factorial(5), 120); // Will fail due to bug
++    }
++
++    #[test]
++    fn test_factorial_zero() {
++        assert_eq!(factorial(0), 1);
++    }
++
++    #[test]
++    fn test_fibonacci_basic() {
++        assert_eq!(fibonacci(10), 55); // Will fail due to bug
++    }
++
++    #[test]
++    fn test_fibonacci_zero() {
++        assert_eq!(fibonacci(0), 0); // Will fail due to bug
++    }
++
++    #[test]
++    fn test_fibonacci_one() {
++        assert_eq!(fibonacci(1), 1); // Will fail due to bug
++    }
++
++    #[test]
++    fn test_safe_divide_normal() {
++        assert_eq!(safe_divide(10.0, 2.0), Some(5.0));
++    }
++
++    #[test]
++    fn test_safe_divide_by_zero() {
++        assert_eq!(safe_divide(5.0, 0.0), None); // Will fail due to bug
++    }
++}
+--- /dev/null
++++ b/codex-rs/codegen-tests/src/lib.rs
+@@ -0,0 +1,48 @@
++//! Code Generation Test Suite Library
++//!
++//! This library provides math utility functions for testing codex-rs
++//! code generation capabilities.
++
++pub fn add(a: f64, b: f64) -> f64 {
++    a + b
++}
++
++pub fn subtract(a: f64, b: f64) -> f64 {
++    a - b
++}
++
++pub fn multiply(a: f64, b: f64) -> f64 {
++    a * b
++}
++
++pub fn divide(a: f64, b: f64) -> f64 {
++    if b == 0.0 {
++        panic!("Division by zero");
++    }
++    a / b
++}
++
++pub fn power(base: f64, exp: f64) -> f64 {
++    base.powf(exp)
++}
++
++pub fn sqrt(x: f64) -> f64 {
++    if x < 0.0 {
++        panic!("Square root of negative number");
++    }
++    x.sqrt()
++}
++
++pub fn clamp(value: f64, min: f64, max: f64) -> f64 {
++    if value < min {
++        min
++    } else if value > max {
++        max
++    } else {
++        value
++    }
++}
++
++pub fn lerp(a: f64, b: f64, t: f64) -> f64 {
++    a + (b - a) * t
++}
+--- /dev/null
++++ b/codex-rs/codegen-tests/src/main.rs
+@@ -0,0 +1,72 @@
++// Code Generation Test Suite
++//
++// This package serves as a test bed for verifying codex-rs can complete
++// production-grade code development tasks including:
++// 1. Adding new functions with proper signatures and tests
++// 2. Fixing bugs in existing code
++// 3. Refactoring code while maintaining functionality
++// 4. Performance validation
++
++fn main() {
++    println!("Code Generation Test Suite - Demo");
++    println!("==================================");
++
++    // Test basic math operations
++    let a = 42.0;
++    let b = 8.0;
++
++    println!("a = {}, b = {}", a, b);
++    println!("add(a, b) = {}", add(a, b));
++    println!("subtract(a, b) = {}", subtract(a, b));
++    println!("multiply(a, b) = {}", multiply(a, b));
++    println!("divide(a, b) = {}", divide(a, b));
++    println!("power(a, 2) = {}", power(a, 2.0));
++    println!("sqrt(16) = {}", sqrt(16.0));
++}
++
++// Basic arithmetic operations
++fn add(a: f64, b: f64) -> f64 {
++    a + b
++}
++
++fn subtract(a: f64, b: f64) -> f64 {
++    a - b
++}
++
++fn multiply(a: f64, b: f64) -> f64 {
++    a * b
++}
++
++fn divide(a: f64, b: f64) -> f64 {
++    if b == 0.0 {
++        panic!("Division by zero");
++    }
++    a / b
++}
++
++// Advanced math operations (to be generated by codex)
++fn power(base: f64, exp: f64) -> f64 {
++    base.powf(exp)
++}
++
++fn sqrt(x: f64) -> f64 {
++    if x < 0.0 {
++        panic!("Square root of negative number");
++    }
++    x.sqrt()
++}
++
++// Utility functions (candidates for refactoring tests)
++fn clamp(value: f64, min: f64, max: f64) -> f64 {
++    if value < min {
++        min
++    } else if value > max {
++        max
++    } else {
++        value
++    }
++}
++
++fn lerp(a: f64, b: f64, t: f64) -> f64 {
++    a + (b - a) * t
++}
+--- /dev/null
++++ b/codex-rs/codegen-tests/tests/math_tests.rs
+@@ -0,0 +1,145 @@
++// Unit tests for math operations
++//
++// These tests verify that the generated code functions correctly.
++// Run with: cargo test
++
++// Import functions from the main module
++extern crate codex_codegen_tests;
++use codex_codegen_tests::{add, subtract, multiply, divide, power, sqrt, clamp, lerp};
++
++#[cfg(test)]
++mod math_tests {
++    use super::*;
++
++    // Basic addition tests
++    #[test]
++    fn test_add_positive_numbers() {
++        assert_eq!(add(2.0, 3.0), 5.0);
++        assert_eq!(add(0.0, 0.0), 0.0);
++        assert_eq!(add(-2.0, 3.0), 1.0);
++    }
++
++    #[test]
++    fn test_add_negative_numbers() {
++        assert_eq!(add(-2.0, -3.0), -5.0);
++        assert_eq!(add(-5.0, 5.0), 0.0);
++    }
++
++    // Subtraction tests
++    #[test]
++    fn test_subtract_positive_numbers() {
++        assert_eq!(subtract(5.0, 3.0), 2.0);
++        assert_eq!(subtract(3.0, 5.0), -2.0);
++    }
++
++    #[test]
++    fn test_subtract_zero() {
++        assert_eq!(subtract(5.0, 0.0), 5.0);
++        assert_eq!(subtract(0.0, 5.0), -5.0);
++    }
++
++    // Multiplication tests
++    #[test]
++    fn test_multiply_positive_numbers() {
++        assert_eq!(multiply(3.0, 4.0), 12.0);
++        assert_eq!(multiply(0.0, 5.0), 0.0);
++    }
++
++    #[test]
++    fn test_multiply_negative_numbers() {
++        assert_eq!(multiply(-2.0, 3.0), -6.0);
++        assert_eq!(multiply(-2.0, -3.0), 6.0);
++    }
++
++    // Division tests
++    #[test]
++    fn test_divide_positive_numbers() {
++        assert_eq!(divide(10.0, 2.0), 5.0);
++        assert_eq!(divide(7.0, 2.0), 3.5);
++    }
++
++    #[test]
++    fn test_divide_negative_numbers() {
++        assert_eq!(divide(-10.0, 2.0), -5.0);
++        assert_eq!(divide(10.0, -2.0), -5.0);
++    }
++
++    #[test]
++    #[should_panic(expected = "Division by zero")]
++    fn test_divide_by_zero_panics() {
++        divide(5.0, 0.0);
++    }
++
++    // Power function tests
++    #[test]
++    fn test_power_positive() {
++        assert!((power(2.0, 3.0) - 8.0).abs() < f64::EPSILON);
++        assert!((power(5.0, 2.0) - 25.0).abs() < f64::EPSILON);
++    }
++
++    #[test]
++    fn test_power_zero() {
++        assert!((power(5.0, 0.0) - 1.0).abs() < f64::EPSILON);
++        assert!((power(0.0, 5.0) - 0.0).abs() < f64::EPSILON);
++    }
++
++    #[test]
++    fn test_power_negative_exponent() {
++        assert!((power(2.0, -1.0) - 0.5).abs() < f64::EPSILON);
++    }
++
++    // Square root tests
++    #[test]
++    fn test_sqrt_positive_numbers() {
++        assert!((sqrt(16.0) - 4.0).abs() < f64::EPSILON);
++        assert!((sqrt(2.0) - 1.41421356237).abs() < 1e-9);
++    }
++
++    #[test]
++    fn test_sqrt_zero() {
++        assert!((sqrt(0.0) - 0.0).abs() < f64::EPSILON);
++    }
++
++    #[test]
++    #[should_panic(expected = "Square root of negative number")]
++    fn test_sqrt_negative_panics() {
++        sqrt(-1.0);
++    }
++
++    // Clamp function tests
++    #[test]
++    fn test_clamp_within_range() {
++        assert_eq!(clamp(5.0, 0.0, 10.0), 5.0);
++        assert_eq!(clamp(0.5, 0.0, 1.0), 0.5);
++    }
++
++    #[test]
++    fn test_clamp_below_minimum() {
++        assert_eq!(clamp(-5.0, 0.0, 10.0), 0.0);
++        assert_eq!(clamp(0.0, 5.0, 10.0), 5.0);
++    }
++
++    #[test]
++    fn test_clamp_above_maximum() {
++        assert_eq!(clamp(15.0, 0.0, 10.0), 10.0);
++        assert_eq!(clamp(10.0, 0.0, 5.0), 5.0);
++    }
++
++    // Linear interpolation tests
++    #[test]
++    fn test_lerp_at_extremes() {
++        assert!((lerp(0.0, 10.0, 0.0) - 0.0).abs() < f64::EPSILON);
++        assert!((lerp(0.0, 10.0, 1.0) - 10.0).abs() < f64::EPSILON);
++    }
++
++    #[test]
++    fn test_lerp_midpoint() {
++        assert!((lerp(0.0, 10.0, 0.5) - 5.0).abs() < f64::EPSILON);
++    }
++
++    #[test]
++    fn test_lerp_beyond_range() {
++        assert!((lerp(0.0, 10.0, -0.5) - (-5.0)).abs() < f64::EPSILON);
++        assert!((lerp(0.0, 10.0, 1.5) - 15.0).abs() < f64::EPSILON);
++    }
++}
