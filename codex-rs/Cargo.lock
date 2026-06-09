@@ -2431,6 +2431,7 @@ dependencies = [
  "eventsource-stream",
  "futures",
  "http 1.4.0",
+ "httpdate",
  "opentelemetry",
  "opentelemetry_sdk",
  "pretty_assertions",
