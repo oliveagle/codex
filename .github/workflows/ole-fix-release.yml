@@ -21,17 +21,6 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
       - name: Configure Git for submodules
         run: |
           git config --global net.git-fetch-with-cli true
@@ -72,19 +61,10 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Configure Git for submodules
+      - name: Configure Git with mirrors (fix Chromium SecureTransport issue)
         run: |
+          # Use GitHub mirrors for problematic Google sources
+          git config --global url."https://github.com/cortex/libyuv.git".insteadOf "https://chromium.googlesource.com/libyuv/libyuv"
           git config --global net.git-fetch-with-cli true
           git config --global http.lowSpeedLimit 0
           git config --global http.lowSpeedTime 999999
