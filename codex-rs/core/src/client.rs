@@ -46,6 +46,7 @@ use codex_api::RealtimeSessionConfig as ApiRealtimeSessionConfig;
 use codex_api::Reasoning;
 use codex_api::ReasoningContext;
 use codex_api::RequestTelemetry;
+use codex_api::ChatClient as ApiChatClient;
 use codex_api::ReqwestTransport;
 use codex_api::ResponseCreateWsRequest;
 use codex_api::ResponsesApiRequest;
@@ -84,6 +85,7 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout_trace::CompactionTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
+use codex_tools::create_tools_json_for_chat_completions_api;
 use codex_tools::create_tools_json_for_responses_api;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
@@ -1337,6 +1339,68 @@ impl ModelClientSession {
         }
     }
 
+    /// Streams a turn via the Chat Completions API for providers that don't
+    /// support the Responses API (e.g. Ollama, vLLM, LM Studio).
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(
+        name = "model_client.stream_chat_completions",
+        level = "info",
+        skip_all,
+        fields(
+            model = %model_info.slug,
+            wire_api = "chat",
+            transport = "chat_http",
+            http.method = "POST",
+            api.path = "chat/completions"
+        )
+    )]
+    async fn stream_chat_completions(
+        &self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        session_telemetry: &SessionTelemetry,
+        _effort: Option<ReasoningEffortConfig>,
+        _summary: ReasoningSummaryConfig,
+        _service_tier: Option<String>,
+        _turn_metadata_header: Option<&str>,
+        _inference_trace: &InferenceTraceContext,
+    ) -> Result<ResponseStream> {
+        let client_setup = self.client.current_client_setup().await?;
+        let transport = ReqwestTransport::new(build_reqwest_client());
+        let (request_telemetry, sse_telemetry) = Self::build_streaming_telemetry(
+            session_telemetry,
+            AuthRequestTelemetryContext::new(
+                client_setup.auth.as_ref().map(CodexAuth::auth_mode),
+                client_setup.api_auth.as_ref(),
+                PendingUnauthorizedRetry::default(),
+            ),
+            RequestRouteTelemetry::for_endpoint("chat/completions"),
+            self.client.state.auth_env_telemetry.clone(),
+        );
+
+        let tools = create_tools_json_for_chat_completions_api(&prompt.tools)?;
+        let chat_client = ApiChatClient::new(
+            transport,
+            client_setup.api_provider,
+            client_setup.api_auth,
+        )
+        .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
+
+        let api_stream = chat_client
+            .stream_prompt(
+                &model_info.slug,
+                &prompt.base_instructions.text,
+                &prompt.get_formatted_input(),
+                &tools,
+                None, // conversation_id
+                None, // session_source
+            )
+            .await
+            .map_err(map_api_error)?;
+
+        map_chat_response_stream(api_stream)
+    }
+
     /// Streams a turn via the OpenAI Responses API.
     ///
     /// Handles reasoning summaries, verbosity, and the `text` controls used for output schemas.
@@ -1744,6 +1808,19 @@ impl ModelClientSession {
     ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.info().wire_api;
         match wire_api {
+            WireApi::Chat => {
+                self.stream_chat_completions(
+                    prompt,
+                    model_info,
+                    session_telemetry,
+                    effort,
+                    summary,
+                    service_tier,
+                    turn_metadata_header,
+                    inference_trace,
+                )
+                .await
+            }
             WireApi::Responses => {
                 if self.client.responses_websocket_enabled() {
                     let request_trace = current_span_w3c_trace_context();
@@ -1871,6 +1948,40 @@ fn add_responses_lite_header(headers: &mut ApiHeaderMap, use_responses_lite: boo
 
 const RESPONSE_STREAM_CHANNEL_CAPACITY: usize = 1600;
 const STREAM_DROPPED_REASON: &str = "response stream dropped before provider terminal event";
+
+/// Maps a Chat Completions API response stream to the core `ResponseStream` type.
+///
+/// This is a simpler version of `map_response_stream` that doesn't include
+/// inference tracing, since Chat Completions is used for providers that don't
+/// support the full Responses API.
+fn map_chat_response_stream(api_stream: codex_api::ResponseStream) -> Result<ResponseStream> {
+    use futures::StreamExt;
+
+    let (tx_event, rx_event) =
+        mpsc::channel::<Result<ResponseEvent>>(RESPONSE_STREAM_CHANNEL_CAPACITY);
+    let consumer_dropped = CancellationToken::new();
+
+    tokio::spawn(async move {
+        let mut stream = api_stream;
+        while let Some(event) = stream.next().await {
+            let event = match event {
+                Ok(ev) => ev,
+                Err(err) => {
+                    let _ = tx_event.send(Err(map_api_error(err))).await;
+                    return;
+                }
+            };
+            if tx_event.send(Ok(event)).await.is_err() {
+                return;
+            }
+        }
+    });
+
+    Ok(ResponseStream {
+        rx_event,
+        consumer_dropped,
+    })
+}
 
 fn map_response_stream(
     api_stream: codex_api::ResponseStream,
