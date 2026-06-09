@@ -32,13 +32,16 @@ ole-fix/
 │   ├── 0001-chore-update-deps-and-add-codegen-tests.patch
 │   ├── 0002-feat-responses-api-proxy-add-Chat-Completions-API-co.patch
 │   ├── 0003-feat-responses-api-proxy-add-Chat-Completions-API-su.patch
-│   └── 0004-chore-remove-unused-ImagesClient-re-export.patch
+│   ├── 0004-chore-remove-unused-ImagesClient-re-export.patch
+│   ├── 0005-docs-clarify-ole-fix-purpose.patch
+│   └── 0006-fix-codex-client-honor-Retry-After-header-for-429-re.patch
 ├── modules/                  # 按功能拆分的补丁 (选择性重放)
 │   ├── codegen-tests/        # 代码生成测试基础设施
 │   ├── chat-conversion/      # Chat↔Responses 类型转换
 │   ├── chat-api/             # Chat Completions API 端点 + SSE
 │   ├── deps-tweaks/          # 依赖/模型/锁更新
-│   └── cleanup/              # 清理 (移除未使用的 re-export)
+│   ├── cleanup/              # 清理 (移除未使用的 re-export)
+│   └── rate-limit-backoff/   # 429 Retry-After 处理
 ├── scripts/
 │   ├── apply.sh              # 按顺序应用补丁
 │   ├── verify.sh             # 验证补丁是否干净 (dry-run)
@@ -116,6 +119,16 @@ git apply ole-fix/modules/chat-conversion/chat-conversion.patch
 
 ### 0004 - remove unused ImagesClient re-export
 - 清理 `lib.rs` 中未使用的 `ImagesClient` 导出
+
+### 0005 - clarify ole-fix purpose
+- README 文档更新, 说明 Chat Completions API 支持目标
+
+### 0006 - fix 429 Retry-After backoff (重要)
+- 修复 codex-client 中 429 错误未处理 Retry-After 头的问题
+- 支持多种速率限制头部: Retry-After, X-RateLimit-Reset-After, X-RateLimit-Reset
+- 添加 MAX_RETRY_AFTER 上限 (60s), 防止过长等待
+- 添加 httpdate 依赖和 7 个单元测试
+- 影响文件: `codex-client/src/retry.rs`, `codex-client/Cargo.toml`
 
 ## 上游冲突处理流程
 
