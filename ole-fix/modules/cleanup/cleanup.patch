@@ -1,0 +1,24 @@
+From e1cf2da9e42d8ed1abefe29da057613e1cb3dd17 Mon Sep 17 00:00:00 2001
+From: oliveagle <oliveagle@gmail.com>
+Date: Tue, 9 Jun 2026 23:22:39 +0800
+Subject: [PATCH 4/4] chore: remove unused ImagesClient re-export
+
+---
+ codex-rs/codex-api/src/lib.rs | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/codex-rs/codex-api/src/lib.rs b/codex-rs/codex-api/src/lib.rs
+index e49e3e2ef..483250043 100644
+--- a/codex-rs/codex-api/src/lib.rs
++++ b/codex-rs/codex-api/src/lib.rs
+@@ -44,7 +44,6 @@ pub use crate::common::WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY;
+ pub use crate::common::create_text_param_for_request;
+ pub use crate::common::response_create_client_metadata;
+ pub use crate::endpoint::CompactClient;
+-pub use crate::endpoint::ImagesClient;
+ pub use crate::endpoint::MemoriesClient;
+ pub use crate::endpoint::ModelsClient;
+ pub use crate::endpoint::RealtimeCallClient;
+-- 
+2.43.0
+
