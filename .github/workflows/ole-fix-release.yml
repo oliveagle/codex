@@ -1,0 +1,148 @@
+name: ole-fix-release
+
+on:
+  push:
+    branches:
+      - ole-fix
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux-amd64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ole-fix
+      
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Build responses-api-proxy
+        run: |
+          cd codex-rs/responses-api-proxy
+          cargo build --release --target x86_64-unknown-linux-gnu
+      
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          cp codex-rs/target/x86_64-unknown-linux-gnu/release/responses-api-proxy release/
+          cd release
+          tar czf responses-api-proxy-linux-amd64.tar.gz responses-api-proxy
+          sha256sum responses-api-proxy-linux-amd64.tar.gz > SHA256SUMS
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-amd64
+          path: release/*
+          retention-days: 7
+
+  build-mac-arm64:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ole-fix
+      
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Build responses-api-proxy
+        run: |
+          cd codex-rs/responses-api-proxy
+          cargo build --release --target aarch64-apple-darwin
+      
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          cp codex-rs/target/aarch64-apple-darwin/release/responses-api-proxy release/
+          cd release
+          tar czf responses-api-proxy-mac-arm64.tar.gz responses-api-proxy
+          sha256sum responses-api-proxy-mac-arm64.tar.gz > SHA256SUMS
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-arm64
+          path: release/*
+          retention-days: 7
+
+  release:
+    needs: [build-linux-amd64, build-mac-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ole-fix
+      
+      - name: Download linux-amd64
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-amd64
+          path: release/linux-amd64
+      
+      - name: Download mac-arm64
+        uses: actions/download-artifact@v4
+        with:
+          name: mac-arm64
+          path: release/mac-arm64
+      
+      - name: Prepare combined SHA256SUMS
+        run: |
+          cat release/linux-amd64/SHA256SUMS release/mac-arm64/SHA256SUMS > release/SHA256SUMS
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ole-fix-${{ github.run_number }}
+          name: ole-fix build ${{ github.run_number }}
+          body: |
+            ole-fix release build
+            
+            ## Changes
+            - Chat Completions API compatibility
+            - 429 Retry-After backoff fix
+            
+            ## Assets
+            - responses-api-proxy-linux-amd64.tar.gz
+            - responses-api-proxy-mac-arm64.tar.gz
+            
+            ## Checksums
+            ```
+            ${{ contents-file('release/SHA256SUMS') }}
+            ```
+          files: |
+            release/linux-amd64/responses-api-proxy-linux-amd64.tar.gz
+            release/mac-arm64/responses-api-proxy-mac-arm64.tar.gz
+            release/SHA256SUMS
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
