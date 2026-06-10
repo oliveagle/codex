@@ -30,8 +30,6 @@
 ole-fix/
 ├── patches/                  # 原始补丁 (按 commit 顺序, git format-patch 输出)
 │   ├── 0001-chore-update-deps-and-add-codegen-tests.patch
-│   ├── 0002-feat-responses-api-proxy-add-Chat-Completions-API-co.patch
-│   ├── 0003-feat-responses-api-proxy-add-Chat-Completions-API-su.patch
 │   ├── 0004-chore-remove-unused-ImagesClient-re-export.patch
 │   ├── 0005-docs-clarify-ole-fix-purpose.patch
 │   └── 0006-fix-codex-client-honor-Retry-After-header-for-429-re.patch
@@ -105,18 +103,6 @@ git apply ole-fix/modules/chat-conversion/chat-conversion.patch
 - 添加 codegen-tests 测试基础设施
 - 影响文件: `.gitmodules`, `Cargo.*`, `codegen-tests/`
 
-### 0002 - add Chat Completions API compatibility (核心)
-- 添加 /v1/chat/completions 端点转换层
-- 实现 Chat↔Responses 类型定义和转换逻辑
-- 更新模型信息 (models.json)
-- 影响文件: `conversion/`, `types/chat.rs`, `tests/chat_completions.rs`
-
-### 0003 - add Chat Completions API support (核心)
-- 添加 Chat endpoint, request 和 SSE 类型
-- 添加 Chat Completions 请求/响应处理
-- 更新模型提供者信息
-- 影响文件: `endpoint/chat.rs`, `requests/chat.rs`, `sse/chat.rs`
-
 ### 0004 - remove unused ImagesClient re-export
 - 清理 `lib.rs` 中未使用的 `ImagesClient` 导出
 
@@ -180,7 +166,6 @@ cd codex-rs && cargo check
 
 # 运行测试
 cargo test --package codex-api
-cargo test --package responses-api-proxy
 ```
 
 **关键原则**：即使上游重写了相关代码，也要确保 Chat Completions API 支持仍然存在。如果 upstream 完全移除了相关接口，需要在新代码库上重新实现。

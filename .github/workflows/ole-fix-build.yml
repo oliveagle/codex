@@ -1,4 +1,4 @@
-name: ole-fix-release
+name: ole-fix-build
 
 on:
   push:
@@ -12,38 +12,38 @@ permissions:
 jobs:
   build-linux-amd64:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ole-fix
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
 
-      - name: Configure Git for submodules
+      - name: Configure Git
         run: |
           git config --global net.git-fetch-with-cli true
           git config --global http.lowSpeedLimit 0
           git config --global http.lowSpeedTime 999999
           git config --global http.postBuffer 1048576000
 
-      - name: Build responses-api-proxy
+      - name: Build codex
         run: |
-          cd codex-rs && cargo build --release --target x86_64-unknown-linux-gnu -p codex-responses-api-proxy
+          cd codex-rs && cargo build --release --target x86_64-unknown-linux-gnu -p codex-cli --bin codex
         env:
+          CODEX_SKIP_BWRAP_BUILD: "1"
           CARGO_NET_RETRY: 10
           CARGO_NET_FETCH_WITH_CLI: true
 
-      - name: Prepare release assets
+      - name: Prepare linux-amd64 asset
         run: |
           mkdir -p release
-          cp codex-rs/target/x86_64-unknown-linux-gnu/release/codex-responses-api-proxy release/
+          cp codex-rs/target/x86_64-unknown-linux-gnu/release/codex release/
           cd release
-          tar czf codex-responses-api-proxy-linux-amd64.tar.gz codex-responses-api-proxy
-          sha256sum codex-responses-api-proxy-linux-amd64.tar.gz > SHA256SUMS
+          tar czf codex-linux-amd64.tar.gz codex
+          sha256sum codex-linux-amd64.tar.gz > SHA256SUMS
 
-      - name: Upload artifacts
+      - name: Upload linux-amd64 artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-amd64
@@ -51,41 +51,41 @@ jobs:
           retention-days: 7
 
   build-mac-arm64:
-    runs-on: macos-latest
+    runs-on: macos-15
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ole-fix
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
 
-      - name: Configure Git with mirrors (fix Chromium SecureTransport issue)
+      - name: Configure Git
+        # Do NOT redirect chromium.googlesource.com to the dead cortex/libyuv mirror.
+        # Let cargo use the original URL with the system git CLI.
         run: |
-          # Use GitHub mirrors for problematic Google sources
-          git config --global url."https://github.com/cortex/libyuv.git".insteadOf "https://chromium.googlesource.com/libyuv/libyuv"
           git config --global net.git-fetch-with-cli true
           git config --global http.lowSpeedLimit 0
           git config --global http.lowSpeedTime 999999
           git config --global http.postBuffer 1048576000
 
-      - name: Build responses-api-proxy
+      - name: Build codex
         run: |
-          cd codex-rs && cargo build --release --target aarch64-apple-darwin -p codex-responses-api-proxy
+          cd codex-rs && cargo build --release --target aarch64-apple-darwin -p codex-cli --bin codex
         env:
+          CODEX_SKIP_BWRAP_BUILD: "1"
           CARGO_NET_RETRY: 10
           CARGO_NET_FETCH_WITH_CLI: true
 
-      - name: Prepare release assets
+      - name: Prepare mac-arm64 asset
         run: |
           mkdir -p release
-          cp codex-rs/target/aarch64-apple-darwin/release/codex-responses-api-proxy release/
+          cp codex-rs/target/aarch64-apple-darwin/release/codex release/
           cd release
-          tar czf codex-responses-api-proxy-mac-arm64.tar.gz codex-responses-api-proxy
-          sha256sum codex-responses-api-proxy-mac-arm64.tar.gz > SHA256SUMS
+          tar czf codex-mac-arm64.tar.gz codex
+          sha256sum codex-mac-arm64.tar.gz > SHA256SUMS
 
-      - name: Upload artifacts
+      - name: Upload mac-arm64 artifact
         uses: actions/upload-artifact@v4
         with:
           name: mac-arm64
@@ -97,8 +97,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ole-fix
 
       - name: Download linux-amd64
         uses: actions/download-artifact@v4
@@ -124,16 +122,12 @@ jobs:
           body: |
             ole-fix release build
 
-            ## Changes
-            - Chat Completions API compatibility
-            - 429 Retry-After backoff fix
-
             ## Assets
-            - codex-responses-api-proxy-linux-amd64.tar.gz
-            - codex-responses-api-proxy-mac-arm64.tar.gz
+            - codex-linux-amd64.tar.gz
+            - codex-mac-arm64.tar.gz
           files: |
-            release/linux-amd64/codex-responses-api-proxy-linux-amd64.tar.gz
-            release/mac-arm64/codex-responses-api-proxy-mac-arm64.tar.gz
+            release/linux-amd64/codex-linux-amd64.tar.gz
+            release/mac-arm64/codex-mac-arm64.tar.gz
             release/SHA256SUMS
           draft: false
           prerelease: true
