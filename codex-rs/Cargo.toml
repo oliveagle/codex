@@ -81,7 +81,6 @@ members = [
     "rollout",
     "rollout-trace",
     "rmcp-client",
-    "responses-api-proxy",
     "response-debug-context",
     "sandboxing",
     "stdio-to-uds",
@@ -214,7 +213,7 @@ codex-model-provider = { path = "model-provider" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-prompts = { path = "prompts" }
-codex-responses-api-proxy = { path = "responses-api-proxy" }
+codex-realtime-webrtc = { path = "realtime-webrtc" }
 codex-response-debug-context = { path = "response-debug-context" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-rollout = { path = "rollout" }

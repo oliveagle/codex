@@ -9,3 +9,9 @@ rustflags = ["-C", "link-arg=/STACK:8388608", "-C", "link-arg=/arm64hazardfree"]
 
 [target.'cfg(all(windows, target_env = "gnu"))']
 rustflags = ["-C", "link-arg=-Wl,--stack,8388608"]
+
+# Force cargo to use system git for fetching git dependencies.
+# This allows the insteadOf git config (set in CI workflow) to take effect
+# for replacing chromium.googlesource.com URLs with GitHub mirrors.
+[net]
+git-fetch-with-cli = true
