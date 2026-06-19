@@ -12,6 +12,7 @@ mod session;
 
 pub use compact::CompactClient;
 pub use chat::ChatClient;
+pub use images::ImagesClient;
 pub use memories::MemoriesClient;
 pub use models::ModelsClient;
 pub use realtime_call::RealtimeCallClient;

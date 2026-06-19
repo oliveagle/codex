@@ -83,6 +83,7 @@ pub fn convert_chat_to_responses(
                         text: content.to_string(),
                     }],
                     phase: None,
+                    metadata: None,
                 });
             }
             ChatMessageRole::Assistant => {
@@ -96,6 +97,7 @@ pub fn convert_chat_to_responses(
                             namespace: None,
                             arguments: tool_call.function.arguments.clone(),
                             call_id: tool_call.id.clone(),
+                            metadata: None,
                         });
                     }
                     // Also add assistant content if present (can coexist with tool_calls)
@@ -108,6 +110,7 @@ pub fn convert_chat_to_responses(
                                     text: content.clone(),
                                 }],
                                 phase: None,
+                                metadata: None,
                             });
                         }
                     }
@@ -122,6 +125,7 @@ pub fn convert_chat_to_responses(
                                 text: content.to_string(),
                             }],
                             phase: None,
+                            metadata: None,
                         });
                     }
                 }
@@ -133,8 +137,10 @@ pub fn convert_chat_to_responses(
                 })?;
                 let output = msg.content.as_deref().unwrap_or("");
                 input.push(ResponseItem::FunctionCallOutput {
+                    id: None,
                     call_id: tool_call_id.clone(),
                     output: FunctionCallOutputPayload::from_text(output.to_string()),
+                    metadata: None,
                 });
             }
         }

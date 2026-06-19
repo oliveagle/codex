@@ -92,6 +92,10 @@ impl<'a> ChatRequestBuilder<'a> {
                     }
                 }
                 ResponseItem::FunctionCall { call_id, name, arguments, .. } => {
+                    // Parse arguments string into a JSON object — upstream models (Qwen, etc.)
+                    // expect an object, not a JSON-encoded string.
+                    let args: Value = serde_json::from_str(arguments)
+                        .unwrap_or_else(|_| json!({ "_raw": arguments }));
                     messages.push(json!({
                         "role": "assistant",
                         "tool_calls": [{
@@ -99,7 +103,7 @@ impl<'a> ChatRequestBuilder<'a> {
                             "type": "function",
                             "function": {
                                 "name": name,
-                                "arguments": arguments,
+                                "arguments": args,
                             }
                         }]
                     }));
