@@ -313,6 +313,7 @@ pub async fn process_chat_sse<S>(
                         namespace: None,
                         arguments,
                         call_id: id.unwrap_or_else(|| format!("tool-call-{index}")),
+                        metadata: None,
                     };
                     let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                 }
@@ -332,6 +333,7 @@ async fn append_assistant_text(
             role: "assistant".to_string(),
             content: vec![],
             phase: None,
+            metadata: None,
         };
         *assistant_item = Some(item.clone());
         let _ = tx_event
@@ -354,10 +356,11 @@ async fn append_reasoning_text(
 ) {
     if reasoning_item.is_none() {
         let item = ResponseItem::Reasoning {
-            id: String::new(),
+            id: Some(String::new()),
             summary: Vec::new(),
             content: Some(vec![]),
             encrypted_content: None,
+            metadata: None,
         };
         *reasoning_item = Some(item.clone());
         let _ = tx_event

@@ -1390,7 +1390,7 @@ impl ModelClientSession {
             .stream_prompt(
                 &model_info.slug,
                 &prompt.base_instructions.text,
-                &prompt.get_formatted_input(),
+                &prompt.input,
                 &tools,
                 None, // conversation_id
                 None, // session_source
@@ -1816,7 +1816,7 @@ impl ModelClientSession {
                     effort,
                     summary,
                     service_tier,
-                    turn_metadata_header,
+                    None,
                     inference_trace,
                 )
                 .await
