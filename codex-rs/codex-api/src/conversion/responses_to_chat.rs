@@ -211,7 +211,6 @@ mod tests {
                 text: text.to_string(),
             }],
             phase: None,
-            metadata: None,
         }
     }
 
@@ -422,7 +421,6 @@ mod tests {
                 },
             ],
             phase: None,
-            metadata: None,
         }];
 
         let result = convert_responses_to_chat(
@@ -483,7 +481,6 @@ mod tests {
                 text: "Text with phase".to_string(),
             }],
             phase: None,
-            metadata: None,
         }];
 
         let result = convert_responses_to_chat(
@@ -509,7 +506,6 @@ mod tests {
             namespace: None,
             arguments: r#"{"location": "SF"}"#.to_string(),
             call_id: "call_123".to_string(),
-            metadata: None,
         }];
 
         let result = convert_responses_to_chat(
@@ -552,7 +548,6 @@ mod tests {
                 namespace: None,
                 arguments: r#"{"location": "SF"}"#.to_string(),
                 call_id: "call_1".to_string(),
-            metadata: None,
             },
             ResponseItem::FunctionCall {
                 id: None,
@@ -560,7 +555,6 @@ mod tests {
                 namespace: None,
                 arguments: r#"{"timezone": "PST"}"#.to_string(),
                 call_id: "call_2".to_string(),
-            metadata: None,
             },
         ];
 
@@ -608,7 +602,6 @@ mod tests {
                     text: "I'll check the weather for you.".to_string(),
                 }],
                 phase: None,
-            metadata: None,
             },
             ResponseItem::FunctionCall {
                 id: None,
@@ -616,7 +609,6 @@ mod tests {
                 namespace: None,
                 arguments: r#"{"city": "Seattle"}"#.to_string(),
                 call_id: "call_abc".to_string(),
-            metadata: None,
             },
         ];
 
@@ -661,7 +653,6 @@ mod tests {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call_xyz".to_string(),
-            metadata: None,
         }];
 
         let result = convert_responses_to_chat(
@@ -689,7 +680,6 @@ mod tests {
                 text: "Just a text response".to_string(),
             }],
             phase: None,
-            metadata: None,
         }];
 
         let result = convert_responses_to_chat(
@@ -717,7 +707,6 @@ mod tests {
             namespace: None,
             arguments: r#"{"location": "Boston"}"#.to_string(),
             call_id: "call_999".to_string(),
-            metadata: None,
         }];
 
         let result = convert_responses_to_chat(
@@ -746,7 +735,6 @@ mod tests {
             namespace: None,
             arguments: r#"{}"#.to_string(),
             call_id: "call_empty".to_string(),
-            metadata: None,
         }];
 
         let result = convert_responses_to_chat(
@@ -777,7 +765,6 @@ mod tests {
                 namespace: None,
                 arguments: r#"{"x":1}"#.to_string(),
                 call_id: "call_1".to_string(),
-            metadata: None,
             },
             create_text_item("Third part"),
         ];
@@ -815,7 +802,6 @@ mod tests {
                 text: "Hello 🌍 世界 こんにちは 🎉".to_string(),
             }],
             phase: None,
-            metadata: None,
         }];
 
         let result = convert_responses_to_chat(
@@ -841,7 +827,6 @@ mod tests {
                 text: text.to_string(),
             }],
             phase: None,
-            metadata: None,
         }];
 
         let result = convert_responses_to_chat(
@@ -866,7 +851,6 @@ mod tests {
                 text: long_text.clone(),
             }],
             phase: None,
-            metadata: None,
         }];
 
         let result = convert_responses_to_chat(
@@ -899,7 +883,6 @@ mod tests {
                     },
                 ],
                 phase: None,
-            metadata: None,
             },
         ];
 
@@ -924,7 +907,6 @@ mod tests {
             namespace: Some("my.namespace".to_string()),
             arguments: r#"{"arg":"val"}"#.to_string(),
             call_id: "call_with_ns".to_string(),
-            metadata: None,
         }];
 
         let result = convert_responses_to_chat(
@@ -954,7 +936,6 @@ mod tests {
                 text: "Response with metadata".to_string(),
             }],
             phase: Some(codex_protocol::models::MessagePhase::FinalAnswer),
-            metadata: None,
         }];
 
         let result = convert_responses_to_chat(
@@ -1010,7 +991,6 @@ mod tests {
                 namespace: None,
                 arguments: r#"{"a":1}"#.to_string(),
                 call_id: "call_multi_1".to_string(),
-            metadata: None,
             },
             ResponseItem::FunctionCall {
                 id: None,
@@ -1018,7 +998,6 @@ mod tests {
                 namespace: None,
                 arguments: r#"{"b":2}"#.to_string(),
                 call_id: "call_multi_2".to_string(),
-            metadata: None,
             },
             ResponseItem::FunctionCall {
                 id: None,
@@ -1026,7 +1005,6 @@ mod tests {
                 namespace: None,
                 arguments: r#"{"c":3}"#.to_string(),
                 call_id: "call_multi_3".to_string(),
-            metadata: None,
             },
         ];
 
@@ -1065,7 +1043,6 @@ mod tests {
                 text: "这是中文内容。これは日本語です。한국어 내용입니다.".to_string(),
             }],
             phase: None,
-            metadata: None,
         }];
 
         let result = convert_responses_to_chat(
@@ -1092,7 +1069,6 @@ mod tests {
                 text: "Here are some emojis: 😀 🎉 🚀 💻 🌟".to_string(),
             }],
             phase: None,
-            metadata: None,
         }];
 
         let result = convert_responses_to_chat(
@@ -1119,7 +1095,6 @@ mod tests {
                 text: special_text.to_string(),
             }],
             phase: None,
-            metadata: None,
         }];
 
         let result = convert_responses_to_chat(
@@ -1164,7 +1139,6 @@ mod tests {
             namespace: None,
             arguments: r#"{}"#.to_string(),
             call_id: "call_no_args".to_string(),
-            metadata: None,
         }];
 
         let result = convert_responses_to_chat(
@@ -1193,7 +1167,6 @@ mod tests {
             namespace: None,
             arguments: complex_args.to_string(),
             call_id: "call_complex".to_string(),
-            metadata: None,
         }];
 
         let result = convert_responses_to_chat(
