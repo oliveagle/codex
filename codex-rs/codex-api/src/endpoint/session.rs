@@ -153,45 +153,4 @@ impl<T: HttpTransport> EndpointSession<T> {
 
         Ok(stream)
     }
-
-    #[instrument(
-        name = "endpoint_session.stream_with",
-        level = "info",
-        skip_all,
-        fields(http.method = %method, api.path = path)
-    )]
-    pub(crate) async fn stream_with<C>(
-        &self,
-        method: Method,
-        path: &str,
-        extra_headers: HeaderMap,
-        body: Option<Value>,
-        configure: C,
-    ) -> Result<StreamResponse, ApiError>
-    where
-        C: Fn(&mut Request),
-    {
-        let body = body.map(RequestBody::Json);
-        let mut request = self.make_request(&method, path, &extra_headers, body.as_ref());
-        configure(&mut request);
-        let request = request.into_prepared().map_err(TransportError::Build)?;
-        let make_request = || request.clone();
-
-        let stream = run_with_request_telemetry(
-            self.provider.retry.to_policy(),
-            self.request_telemetry.clone(),
-            make_request,
-            |req| {
-                let auth = self.auth.clone();
-                let transport = &self.transport;
-                async move {
-                    let req = auth.apply_auth(req).await.map_err(TransportError::from)?;
-                    transport.stream(req).await
-                }
-            },
-        )
-        .await?;
-
-        Ok(stream)
-    }
 }

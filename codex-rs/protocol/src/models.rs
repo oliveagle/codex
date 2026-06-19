@@ -982,6 +982,12 @@ pub enum ResponseItem {
         // The Responses API returns the function call arguments as a *string* that contains
         // JSON, not as an already‑parsed object. We keep it as a raw string here and let
         // Session::handle_function_call parse it into a Value.
+        // When serializing to upstream APIs (Qwen/DashScope), emit as a JSON object, not a string.
+        #[serde(
+            default,
+            serialize_with = "serialize_arguments_as_object",
+            deserialize_with = "deserialize_arguments_from_json"
+        )]
         arguments: String,
         call_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2062,6 +2068,32 @@ impl std::fmt::Display for FunctionCallOutputPayload {
 
 // (Moved event mapping logic into codex-core to avoid coupling protocol to UI-facing events.)
 
+/// Serialize `arguments` string as a JSON object (not a JSON-encoded string).
+/// Upstream APIs (Qwen/DashScope, etc.) require `arguments` to be an object.
+fn serialize_arguments_as_object<S>(value: &str, serializer: S) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(value) {
+        parsed.serialize(serializer)
+    } else {
+        // If not valid JSON, fall back to serializing as a plain string
+        serializer.serialize_str(value)
+    }
+}
+
+/// Deserialize `arguments` from either a JSON string or a JSON object.
+fn deserialize_arguments_from_json<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::String(s) => Ok(s),
+        other => Ok(other.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2597,6 +2629,28 @@ mod tests {
 
         let text = function_call_output_content_items_to_text(&content_items);
         assert_eq!(text, Some("line 1\nline 2".to_string()));
+    }
+
+    #[test]
+    fn function_call_arguments_serialized_as_object() {
+        let item = ResponseItem::FunctionCall {
+            id: None,
+            name: "get_weather".to_string(),
+            namespace: None,
+            arguments: r#"{"location": "SF"}"#.to_string(),
+            call_id: "call_123".to_string(),
+        };
+
+        let json = serde_json::to_string(&item).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        // arguments must be a JSON object, not a string
+        assert!(
+            v["arguments"].is_object(),
+            "arguments should be an object, got: {}",
+            v["arguments"]
+        );
+        assert_eq!(v["arguments"]["location"], "SF");
     }
 
     #[test]
