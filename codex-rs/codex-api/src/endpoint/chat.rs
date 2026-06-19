@@ -7,6 +7,7 @@ use crate::requests::chat::ChatRequest;
 use crate::requests::chat::ChatRequestBuilder;
 use crate::sse::chat::spawn_chat_stream;
 use crate::telemetry::SseTelemetry;
+use codex_client::EncodedJsonBody;
 use codex_client::HttpTransport;
 use codex_client::RequestCompression;
 use codex_client::RequestTelemetry;
@@ -71,13 +72,16 @@ impl<T: HttpTransport> ChatClient<T> {
         body: Value,
         extra_headers: HeaderMap,
     ) -> Result<ResponseStream, ApiError> {
+        let encoded_body = EncodedJsonBody::encode(&body)
+            .map_err(|e| ApiError::Stream(format!("failed to encode request: {e}")))?;
+
         let stream_response = self
             .session
-            .stream_with(
+            .stream_encoded_json_with(
                 Method::POST,
                 Self::path(),
                 extra_headers,
-                Some(body),
+                Some(encoded_body),
                 |req| {
                     req.headers.insert(
                         http::header::ACCEPT,

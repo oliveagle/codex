@@ -233,9 +233,22 @@ pub async fn process_chat_sse<S>(
                             {
                                 call_state.name.get_or_insert_with(|| fname.to_string());
                             }
-                            if let Some(arguments) = func.get("arguments").and_then(|a| a.as_str())
-                            {
-                                call_state.arguments.push_str(arguments);
+                            if let Some(arguments) = func.get("arguments") {
+                                match arguments {
+                                    serde_json::Value::String(s) => {
+                                        // String arguments are streamed deltas — append.
+                                        call_state.arguments.push_str(s);
+                                    }
+                                    other => {
+                                        // Object arguments: provider sends full/partial
+                                        // object each chunk — replace, don't append.
+                                        let serialized = serde_json::to_string(other)
+                                            .unwrap_or_else(|_| String::new());
+                                        if !serialized.is_empty() {
+                                            call_state.arguments = serialized;
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -313,6 +326,7 @@ pub async fn process_chat_sse<S>(
                         namespace: None,
                         arguments,
                         call_id: id.unwrap_or_else(|| format!("tool-call-{index}")),
+                        metadata: None,
                     };
                     let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                 }
@@ -332,6 +346,7 @@ async fn append_assistant_text(
             role: "assistant".to_string(),
             content: vec![],
             phase: None,
+            metadata: None,
         };
         *assistant_item = Some(item.clone());
         let _ = tx_event
@@ -354,10 +369,11 @@ async fn append_reasoning_text(
 ) {
     if reasoning_item.is_none() {
         let item = ResponseItem::Reasoning {
-            id: String::new(),
+            id: None,
             summary: Vec::new(),
             content: Some(vec![]),
             encrypted_content: None,
+            metadata: None,
         };
         *reasoning_item = Some(item.clone());
         let _ = tx_event
