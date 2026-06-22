@@ -84,7 +84,15 @@ pub fn create_tools_json_for_responses_api(
     let mut tools_json = Vec::new();
 
     for tool in tools {
-        let json = serde_json::to_value(tool)?;
+        let mut json = serde_json::to_value(tool)?;
+
+        // For function tools, strip "strict" - not supported by all providers (e.g. Zhipu).
+        if json.get("type") == Some(&serde_json::Value::String("function".to_string()))
+            && let Some(obj) = json.as_object_mut()
+        {
+            obj.remove("strict");
+        }
+
         tools_json.push(json);
     }
 
@@ -115,18 +123,16 @@ pub fn create_tools_json_for_chat_completions_api(
                 .as_object()
                 .expect("function tool must be an object")
                 .clone();
-            let name = map
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
             // Remove "type" field as it belongs outside the function wrapper.
             map.remove("type");
+            // Remove "strict" field - not supported by all providers (e.g. Zhipu).
+            map.remove("strict");
+            // Remove "defer_loading" field - codex-specific, not OpenAI standard.
+            map.remove("defer_loading");
 
             Some(json!({
                 "type": "function",
                 "function": map,
-                "name": name,
             }))
         })
         .collect::<Vec<Value>>();
