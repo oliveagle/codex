@@ -186,8 +186,10 @@ pub struct ResponsesApiRequest {
     pub instructions: String,
     pub input: Vec<ResponseItem>,
     pub tools: Vec<serde_json::Value>,
-    pub tool_choice: String,
-    pub parallel_tool_calls: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
     pub reasoning: Option<Reasoning>,
     pub store: bool,
     pub stream: bool,
@@ -210,8 +212,8 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
             previous_response_id: None,
             input: request.input.clone(),
             tools: request.tools.clone(),
-            tool_choice: request.tool_choice.clone(),
-            parallel_tool_calls: request.parallel_tool_calls,
+            tool_choice: request.tool_choice.clone().unwrap_or_else(|| "auto".to_string()),
+            parallel_tool_calls: request.parallel_tool_calls.unwrap_or(false),
             reasoning: request.reasoning.clone(),
             store: request.store,
             stream: request.stream,

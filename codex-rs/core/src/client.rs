@@ -539,7 +539,7 @@ impl ModelClient {
             input: &input,
             instructions: &instructions,
             tools,
-            parallel_tool_calls,
+            parallel_tool_calls: parallel_tool_calls.unwrap_or(false),
             reasoning,
             service_tier: service_tier.as_deref(),
             prompt_cache_key: prompt_cache_key.as_deref(),
@@ -786,8 +786,17 @@ impl ModelClient {
             input.iter_mut().for_each(ResponseItem::clear_metadata);
         }
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
-        let reasoning = Self::build_reasoning(model_info, effort, summary);
-        let include = if reasoning.is_some() {
+        // Only include OpenAI-specific fields for OpenAI/Azure providers.
+        // Third-party providers (Zhipu, Qwen, etc.) via LiteLLM may reject
+        // these fields with error 1210.
+        let is_openai = self.state.provider.info().is_openai()
+            || provider.is_azure_responses_endpoint();
+        let reasoning = if is_openai {
+            Self::build_reasoning(model_info, effort, summary)
+        } else {
+            None
+        };
+        let include = if is_openai && reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
         } else {
             Vec::new()
@@ -803,20 +812,36 @@ impl ModelClient {
             }
             None
         };
-        let text = create_text_param_for_request(
-            verbosity,
-            &prompt.output_schema,
-            prompt.output_schema_strict,
-        );
-        let prompt_cache_key = Some(self.prompt_cache_key());
+        let text = if is_openai {
+            create_text_param_for_request(
+                verbosity,
+                &prompt.output_schema,
+                prompt.output_schema_strict,
+            )
+        } else {
+            None
+        };
+        let prompt_cache_key = if is_openai {
+            Some(self.prompt_cache_key())
+        } else {
+            None
+        };
         let service_tier = model_info.service_tier_for_request(service_tier);
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
             instructions: instructions.clone(),
             input,
             tools,
-            tool_choice: "auto".to_string(),
-            parallel_tool_calls: prompt.parallel_tool_calls && !model_info.use_responses_lite,
+            tool_choice: if is_openai {
+                Some("auto".to_string())
+            } else {
+                None
+            },
+            parallel_tool_calls: if is_openai {
+                Some(prompt.parallel_tool_calls && !model_info.use_responses_lite)
+            } else {
+                None
+            },
             reasoning,
             store: provider.is_azure_responses_endpoint(),
             stream: true,
@@ -824,7 +849,11 @@ impl ModelClient {
             service_tier,
             prompt_cache_key,
             text,
-            client_metadata: Some(responses_metadata.client_metadata()),
+            client_metadata: if is_openai {
+                Some(responses_metadata.client_metadata())
+            } else {
+                None
+            },
         };
         Ok(request)
     }
@@ -1292,6 +1321,18 @@ impl ModelClientSession {
         );
 
         let tools = create_tools_json_for_chat_completions_api(&prompt.tools)?;
+
+        // DEBUG: Log request details for third-party providers
+        let base_instructions = &prompt.base_instructions.text;
+        let input_count = prompt.input.len();
+        let tool_count = tools.len();
+        warn!("=== CHAT COMPLETIONS REQUEST (model: {}, tools: {}, input_items: {}) ===", model_info.slug, tool_count, input_count);
+        for (i, tool) in tools.iter().enumerate() {
+            let tool_json = serde_json::to_string_pretty(tool)
+                .unwrap_or_else(|_| "<failed>".into());
+            warn!("  tool[{}]:\n{}", i, tool_json);
+        }
+
         let chat_client = ApiChatClient::new(
             transport,
             client_setup.api_provider,
@@ -1379,6 +1420,12 @@ impl ModelClientSession {
                 service_tier.clone(),
                 responses_metadata,
             )?;
+            // DEBUG: Log the full request body for third-party providers
+            if !self.client.state.provider.info().is_openai() {
+                let body_str = serde_json::to_string_pretty(&request)
+                    .unwrap_or_else(|_| "<failed to serialize>".into());
+                warn!("=== THIRD-PARTY API REQUEST BODY (model: {}) ===\n{}", model_info.slug, body_str);
+            }
             let store = request.store;
             self.client
                 .prepare_response_items_for_request(&mut request.input, store);

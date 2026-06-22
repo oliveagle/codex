@@ -138,7 +138,6 @@ fn create_tools_json_for_responses_api_includes_top_level_name() {
             "type": "function",
             "name": "demo",
             "description": "A demo tool",
-            "strict": false,
             "parameters": {
                 "type": "object",
                 "properties": {
