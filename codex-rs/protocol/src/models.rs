@@ -979,15 +979,14 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         namespace: Option<String>,
-        // The Responses API returns the function call arguments as a *string* that contains
-        // JSON, not as an already‑parsed object. We keep it as a raw string here and let
-        // Session::handle_function_call parse it into a Value.
-        // When serializing to upstream APIs (Qwen/DashScope), emit as a JSON object, not a string.
-        #[serde(
-            default,
-            serialize_with = "serialize_arguments_as_object",
-            deserialize_with = "deserialize_arguments_from_json"
-        )]
+        // The Responses API returns the function call arguments as a *string* that
+        // contains JSON (not an already-parsed object). We keep it as a raw string here
+        // and let downstream handlers parse it into a Value. Serializing as a JSON object
+        // (the previous ole-fix behavior) breaks third-party Responses-API providers such
+        // as minimax (MiniMax-M3) which reject the object form with `invalid_prompt`.
+        // The Chat Completions endpoint (Qwen/DashScope) builds its own JSON manually and
+        // is unaffected by this wire format.
+        #[serde(default)]
         arguments: String,
         call_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1892,7 +1891,18 @@ impl Serialize for FunctionCallOutputPayload {
         S: Serializer,
     {
         match &self.body {
-            FunctionCallOutputBody::Text(content) => serializer.serialize_str(content),
+            // ole-fix: always emit `function_call_output.output` as an array of
+            // structured content items. Some third-party Responses-compatible
+            // providers (e.g. minimax / MiniMax-M3) reject a bare string here
+            // with `invalid_prompt` (they expect the OpenAI array form). The
+            // array form is also accepted by OpenAI itself, so this is a
+            // lossless normalization on the wire.
+            FunctionCallOutputBody::Text(content) => {
+                let items = vec![FunctionCallOutputContentItem::InputText {
+                    text: content.clone(),
+                }];
+                items.serialize(serializer)
+            }
             FunctionCallOutputBody::ContentItems(items) => items.serialize(serializer),
         }
     }
@@ -2067,32 +2077,6 @@ impl std::fmt::Display for FunctionCallOutputPayload {
 }
 
 // (Moved event mapping logic into codex-core to avoid coupling protocol to UI-facing events.)
-
-/// Serialize `arguments` string as a JSON object (not a JSON-encoded string).
-/// Upstream APIs (Qwen/DashScope, etc.) require `arguments` to be an object.
-fn serialize_arguments_as_object<S>(value: &str, serializer: S) -> std::result::Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(value) {
-        parsed.serialize(serializer)
-    } else {
-        // If not valid JSON, fall back to serializing as a plain string
-        serializer.serialize_str(value)
-    }
-}
-
-/// Deserialize `arguments` from either a JSON string or a JSON object.
-fn deserialize_arguments_from_json<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = serde_json::Value::deserialize(deserializer)?;
-    match value {
-        serde_json::Value::String(s) => Ok(s),
-        other => Ok(other.to_string()),
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -2632,7 +2616,7 @@ mod tests {
     }
 
     #[test]
-    fn function_call_arguments_serialized_as_object() {
+    fn function_call_arguments_serialized_as_string() {
         let item = ResponseItem::FunctionCall {
             id: None,
             name: "get_weather".to_string(),
@@ -2644,13 +2628,13 @@ mod tests {
         let json = serde_json::to_string(&item).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
 
-        // arguments must be a JSON object, not a string
+        // arguments must remain a JSON-encoded string (OpenAI Responses API spec).
         assert!(
-            v["arguments"].is_object(),
-            "arguments should be an object, got: {}",
+            v["arguments"].is_string(),
+            "arguments should be a string, got: {}",
             v["arguments"]
         );
-        assert_eq!(v["arguments"]["location"], "SF");
+        assert_eq!(v["arguments"], r#"{"location": "SF"}"#);
     }
 
     #[test]

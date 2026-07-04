@@ -1322,17 +1322,6 @@ impl ModelClientSession {
 
         let tools = create_tools_json_for_chat_completions_api(&prompt.tools)?;
 
-        // DEBUG: Log request details for third-party providers
-        let base_instructions = &prompt.base_instructions.text;
-        let input_count = prompt.input.len();
-        let tool_count = tools.len();
-        warn!("=== CHAT COMPLETIONS REQUEST (model: {}, tools: {}, input_items: {}) ===", model_info.slug, tool_count, input_count);
-        for (i, tool) in tools.iter().enumerate() {
-            let tool_json = serde_json::to_string_pretty(tool)
-                .unwrap_or_else(|_| "<failed>".into());
-            warn!("  tool[{}]:\n{}", i, tool_json);
-        }
-
         let chat_client = ApiChatClient::new(
             transport,
             client_setup.api_provider,
@@ -1420,12 +1409,6 @@ impl ModelClientSession {
                 service_tier.clone(),
                 responses_metadata,
             )?;
-            // DEBUG: Log the full request body for third-party providers
-            if !self.client.state.provider.info().is_openai() {
-                let body_str = serde_json::to_string_pretty(&request)
-                    .unwrap_or_else(|_| "<failed to serialize>".into());
-                warn!("=== THIRD-PARTY API REQUEST BODY (model: {}) ===\n{}", model_info.slug, body_str);
-            }
             let store = request.store;
             self.client
                 .prepare_response_items_for_request(&mut request.input, store);
