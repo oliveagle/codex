@@ -169,12 +169,22 @@ impl<'a> ChatRequestBuilder<'a> {
                 .tools
                 .iter()
                 .map(|tool| {
-                    if let Some(map) = tool.as_object() {
-                        let _name = map
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default()
-                            .to_string();
+                    // `create_tools_json_for_chat_completions_api` already wraps each
+                    // tool as `{ "type": "function", "function": { name, description,
+                    // parameters } }`. Forward that shape unchanged so third-party
+                    // providers (Qwen, DashScope, Zhipu, ...) can locate
+                    // `function.name` at `tools.0.function.name`.
+                    if let Some(function) = tool.get("function").cloned() {
+                        json!({
+                            "type": "function",
+                            "function": function,
+                        })
+                    } else if let Some(map) = tool.as_object() {
+                        // Fallback: caller passed a Responses-API-shaped tool without
+                        // a `function` wrapper. Treat the whole object as the function
+                        // definition, stripping the outer `type` discriminator.
+                        let mut map = map.clone();
+                        map.remove("type");
                         json!({
                             "type": "function",
                             "function": map,
