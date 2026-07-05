@@ -83,7 +83,7 @@ pub fn convert_chat_to_responses(
                         text: content.to_string(),
                     }],
                     phase: None,
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 });
             }
             ChatMessageRole::Assistant => {
@@ -97,7 +97,7 @@ pub fn convert_chat_to_responses(
                             namespace: None,
                             arguments: tool_call.function.arguments.clone(),
                             call_id: tool_call.id.clone(),
-                            metadata: None,
+                            internal_chat_message_metadata_passthrough: None,
                         });
                     }
                     // Also add assistant content if present (can coexist with tool_calls)
@@ -110,7 +110,7 @@ pub fn convert_chat_to_responses(
                                     text: content.clone(),
                                 }],
                                 phase: None,
-                    metadata: None,
+                                internal_chat_message_metadata_passthrough: None,
                             });
                         }
                     }
@@ -125,7 +125,7 @@ pub fn convert_chat_to_responses(
                                 text: content.to_string(),
                             }],
                             phase: None,
-                    metadata: None,
+                            internal_chat_message_metadata_passthrough: None,
                         });
                     }
                 }
@@ -140,7 +140,7 @@ pub fn convert_chat_to_responses(
                     id: None,
                     call_id: tool_call_id.clone(),
                     output: FunctionCallOutputPayload::from_text(output.to_string()),
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 });
             }
         }
@@ -154,10 +154,12 @@ pub fn convert_chat_to_responses(
         .tools
         .as_ref()
         .map(|tools| {
-            tools
-                .iter()
-                .map(|tool| convert_chat_tool_to_json(tool))
-                .collect()
+            Some(
+                tools
+                    .iter()
+                    .map(|tool| convert_chat_tool_to_json(tool))
+                    .collect(),
+            )
         })
         .unwrap_or_default();
 
@@ -169,8 +171,8 @@ pub fn convert_chat_to_responses(
         instructions,
         input,
         tools,
-        tool_choice: Some(tool_choice),
-        parallel_tool_calls: Some(true),
+        tool_choice,
+        parallel_tool_calls: true,
         reasoning: None,
         store: false,
         stream: chat.stream.unwrap_or(false),
