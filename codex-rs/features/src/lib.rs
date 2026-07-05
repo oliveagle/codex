@@ -152,7 +152,9 @@ pub enum Feature {
     MultiAgentMode,
     /// Enable CSV-backed agent job tools.
     SpawnCsv,
-    /// Enable apps.
+    /// Enable apps (opt-in; opt-in keeps the host-owned `codex_apps` MCP
+    /// server from auto-starting when the ChatGPT auth token is missing or
+    /// expired).
     Apps,
     /// Enable MCP apps.
     EnableMcpApps,
@@ -1056,7 +1058,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::Apps,
         key: "apps",
         stage: Stage::Stable,
-        default_enabled: true,
+        // Opt-in: the host-owned `codex_apps` MCP server is no longer started
+        // by default. Set `[features] apps = true` in config.toml to enable it
+        // (and a valid ChatGPT auth must also be present). When disabled, the
+        // `codex_apps` entry is removed from the effective MCP server list so
+        // a stale or expired token does not produce a noisy startup failure.
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::EnableMcpApps,

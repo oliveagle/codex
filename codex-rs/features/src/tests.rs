@@ -762,3 +762,43 @@ code_mode = true
         message
     );
 }
+
+#[test]
+fn apps_is_opt_in_so_stale_codex_apps_token_does_not_break_startup() {
+    // Regression test: the host-owned `codex_apps` MCP server used to be enabled
+    // by default, which caused `mcpServer/startupStatus/updated` to report
+    // `codex_apps` as `failed` whenever the user's ChatGPT auth token was
+    // expired or missing. Flipping the default to opt-in keeps the session
+    // usable until the user explicitly opts in with `[features] apps = true`.
+    assert_eq!(Feature::Apps.stage(), Stage::Stable);
+    assert_eq!(
+        Feature::Apps.default_enabled(),
+        false,
+        "codex_apps must be opt-in: see the comment on `Feature::Apps` in features/src/lib.rs"
+    );
+    assert_eq!(feature_for_key("apps"), Some(Feature::Apps));
+
+    // Default Features: not enabled.
+    let defaults = Features::with_defaults();
+    assert_eq!(defaults.enabled(Feature::Apps), false);
+    assert_eq!(defaults.apps_enabled_for_auth(/*has_chatgpt_auth*/ true), false);
+    assert_eq!(
+        defaults.apps_enabled_for_auth(/*has_chatgpt_auth*/ false),
+        false
+    );
+
+    // Opt-in via `[features] apps = true` makes it reachable, but only if
+    // ChatGPT auth is also present (preserves the prior gating contract).
+    let toml = toml::from_str::<FeaturesToml>("apps = true").expect("parse");
+    let from_toml = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+    assert_eq!(from_toml.enabled(Feature::Apps), true);
+    assert_eq!(from_toml.apps_enabled_for_auth(true), true);
+    assert_eq!(from_toml.apps_enabled_for_auth(false), false);
+}
