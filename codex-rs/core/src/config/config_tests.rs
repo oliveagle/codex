@@ -5987,6 +5987,10 @@ async fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<(
     .await?;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
 
+    // Feature::Apps is opt-in (see features/src/lib.rs), so explicitly enable
+    // it for the "enabled" assertions below.
+    let _ = config.features.enable(Feature::Apps);
+
     config.apps_mcp_product_sku = Some("tpp".to_string());
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert!(mcp_config.apps_enabled);
