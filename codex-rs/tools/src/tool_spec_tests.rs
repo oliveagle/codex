@@ -8,6 +8,7 @@ use crate::FreeformToolFormat;
 use crate::JsonSchema;
 use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
+use crate::create_tools_json_for_chat_completions_api;
 use crate::create_tools_json_for_responses_api;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchFilters as ConfigWebSearchFilters;
@@ -264,4 +265,155 @@ fn tool_search_tool_spec_serializes_expected_wire_shape() {
             },
         })
     );
+}
+
+
+#[test]
+fn create_tools_json_for_chat_completions_api_wraps_name_inside_function() {
+    // Regression test for: third-party providers (Qwen, DashScope, Zhipu) reject the
+    // Chat Completions request with
+    //   {"error": {"message": "'name' is a required property - 'tools.0.function'"}}
+    // when `tools[0].function.name` is missing. The tool spec is therefore expected
+    // to look like:
+    //   { "type": "function", "function": { "name": "...", "description": "...",
+    //                                       "parameters": { ... } } }
+    // (Responses-API-shaped tools with the name at the top level must NOT leak through.)
+    let tools = vec![ToolSpec::Function(ResponsesApiTool {
+        name: "lookup_order".to_string(),
+        description: "Look up an order".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            BTreeMap::from([(
+                "order_id".to_string(),
+                JsonSchema::string(/*description*/ None),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None,
+        ),
+        output_schema: None,
+    })];
+
+    let chat_tools = create_tools_json_for_chat_completions_api(&tools)
+        .expect("serialize chat tools");
+
+    assert_eq!(
+        chat_tools,
+        vec![json!({
+            "type": "function",
+            "function": {
+                "name": "lookup_order",
+                "description": "Look up an order",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "order_id": { "type": "string" },
+                    },
+                },
+            },
+        })]
+    );
+}
+
+#[test]
+fn create_tools_json_for_chat_completions_api_drops_non_function_tools() {
+    // Web search, namespace, image_generation, and tool_search are not supported on
+    // the Chat Completions API and must be filtered out instead of leaking through
+    // as a malformed `function` entry.
+    let tools = vec![
+        ToolSpec::WebSearch {
+            external_web_access: None,
+            filters: None,
+            user_location: None,
+            search_context_size: None,
+            search_content_types: None,
+        },
+        ToolSpec::Function(ResponsesApiTool {
+            name: "echo".to_string(),
+            description: "Echo a string".to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: JsonSchema::object(
+                BTreeMap::new(),
+                /*required*/ None,
+                /*additional_properties*/ None,
+            ),
+            output_schema: None,
+        }),
+    ];
+
+    let chat_tools = create_tools_json_for_chat_completions_api(&tools)
+        .expect("serialize chat tools");
+
+    assert_eq!(
+        chat_tools,
+        vec![json!({
+            "type": "function",
+            "function": {
+                "name": "echo",
+                "description": "Echo a string",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                },
+            },
+        })]
+    );
+}
+
+#[test]
+fn end_to_end_chat_completions_body_has_function_name_for_qwen_dashscope() {
+    // End-to-end shape: this is the exact JSON the codex-api `ChatRequestBuilder`
+    // sends on the wire for a single function tool. Third-party providers such
+    // as Qwen / DashScope / Zhipu reject the request with
+    //   {"error": {"message": "'name' is a required property - 'tools.0.function'"}}
+    // when `tools[0].function.name` is missing. The shape below is the one that
+    // satisfies that constraint: `name` lives inside the inner `function` object,
+    // not at the top level of `tools[0]`.
+    let tools = vec![ToolSpec::Function(ResponsesApiTool {
+        name: "lookup_order".to_string(),
+        description: "Look up an order".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            BTreeMap::from([(
+                "order_id".to_string(),
+                JsonSchema::string(/*description*/ None),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None,
+        ),
+        output_schema: None,
+    })];
+
+    let chat_tools = create_tools_json_for_chat_completions_api(&tools)
+        .expect("serialize chat tools");
+
+    // Simulate the final body the way codex-api would post it.
+    let body = json!({
+        "model": "qwen-plus",
+        "messages": [],
+        "stream": true,
+        "tools": chat_tools,
+    });
+
+    // Walk the path Qwen reported as missing `name`.
+    let tools0 = body
+        .get("tools")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .expect("tools[0] exists");
+    let name = tools0
+        .get("function")
+        .and_then(|f| f.get("name"))
+        .and_then(|v| v.as_str());
+    assert_eq!(
+        name,
+        Some("lookup_order"),
+        "tools[0].function.name must be set so Qwen accepts the request"
+    );
+    // Sanity: the Responses-API-shaped top-level tool must NOT leak into
+    // `function` (which would push `name` one level deeper and trigger the
+    // 'name' is a required property - tools.0.function error).
+    assert!(tools0.get("function").and_then(|f| f.get("type")).is_none());
 }
