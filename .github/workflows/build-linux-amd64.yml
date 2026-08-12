@@ -1,14 +1,11 @@
 # Build Linux AMD64 binary for deployment to local machines.
-# This workflow builds a static/musl-linked binary that works across
-# different Linux distributions (Ubuntu, Debian, etc.) without glibc
-# version compatibility issues.
+# Uses ubuntu-22.04 runner (glibc 2.35) for maximum compatibility:
+# - Debian 12 (glibc 2.36) ✓
+# - Ubuntu 22.04+ (glibc 2.35+) ✓
+# - Ubuntu 24.04 (glibc 2.39) ✓
 #
 # Trigger manually via: gh workflow run build-linux-amd64.yml
-# Or via GitHub UI: Actions -> Build Linux AMD64 -> Run workflow
-#
-# Download artifacts:
-#   gh run download <run-id> --name codex-linux-amd64
-#   # or from GitHub UI: Actions -> <run> -> Artifacts
+# Download: gh run download <run-id> --name codex-linux-amd64
 
 name: Build Linux AMD64
 
@@ -29,8 +26,8 @@ permissions:
 
 jobs:
   build-linux-amd64:
-    name: Build Linux AMD64 (static)
-    runs-on: ubuntu-latest
+    name: Build Linux AMD64
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     defaults:
       run:
@@ -46,12 +43,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.95.0"
-          targets: x86_64-unknown-linux-musl
-
-      - name: Install musl tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
 
       - name: Cache cargo registry and build
         uses: actions/cache@v4
@@ -67,38 +58,37 @@ jobs:
             ${{ runner.os }}-cargo-build-
             ${{ runner.os }}-cargo-
 
-      - name: Build codex binary (static/musl)
+      - name: Build codex binary
         env:
           CARGO_PROFILE_RELEASE_LTO: thin
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 4
         run: |
-          cargo build --release --bin codex --target x86_64-unknown-linux-musl
-          strip target/x86_64-unknown-linux-musl/release/codex
+          cargo build --release --bin codex
+          strip target/release/codex
 
       - name: Verify binary
         run: |
-          file target/x86_64-unknown-linux-musl/release/codex
-          ldd target/x86_64-unknown-linux-musl/release/codex || echo "Static binary (no dynamic deps)"
-          target/x86_64-unknown-linux-musl/release/codex --version || true
+          file target/release/codex
+          ldd target/release/codex
+          target/release/codex --version || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: codex-linux-amd64
-          path: codex-rs/target/x86_64-unknown-linux-musl/release/codex
+          path: codex-rs/target/release/codex
           retention-days: 30
           if-no-files-found: error
 
-      - name: Upload artifact (tar.gz for easy deployment)
+      - name: Create tarball
         run: |
-          cd target/x86_64-unknown-linux-musl/release
+          cd target/release
           tar -czvf codex-linux-amd64.tar.gz codex
-        working-directory: codex-rs
 
-      - name: Upload tar.gz artifact
+      - name: Upload tarball artifact
         uses: actions/upload-artifact@v4
         with:
           name: codex-linux-amd64-tarball
-          path: codex-rs/target/x86_64-unknown-linux-musl/release/codex-linux-amd64.tar.gz
+          path: codex-rs/target/release/codex-linux-amd64.tar.gz
           retention-days: 30
           if-no-files-found: error
