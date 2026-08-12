@@ -170,6 +170,27 @@ impl From<CancelErr> for CodexErr {
 }
 
 impl CodexErr {
+    /// Check if this `InvalidRequest` error originates from an upstream proxy
+    /// and is likely transient. Some proxy errors (e.g. missing
+    /// `reasoning_content` or missing `id` fields during format conversion)
+    /// can succeed on retry because the proxy may fix the payload or the
+    /// upstream state may have changed.
+    fn is_retryable_upstream_proxy_error(&self) -> bool {
+        let CodexErr::InvalidRequest(message) = self else {
+            return false;
+        };
+        let retryable_patterns = [
+            "reasoning_text",
+            "reasoning_content",
+            "thinking mode",
+            "missing field `id`",
+            "missing field \"id\"",
+        ];
+        retryable_patterns
+            .iter()
+            .any(|pattern| message.contains(pattern))
+    }
+
     pub fn is_retryable(&self) -> bool {
         match self {
             CodexErr::TurnAborted
@@ -179,7 +200,6 @@ impl CodexErr {
             | CodexErr::UsageNotIncluded
             | CodexErr::QuotaExceeded
             | CodexErr::InvalidImageRequest()
-            | CodexErr::InvalidRequest(_)
             | CodexErr::RefreshTokenFailed(_)
             | CodexErr::UnsupportedOperation(_)
             | CodexErr::Sandbox(_)
@@ -193,6 +213,7 @@ impl CodexErr {
             | CodexErr::UsageLimitReached(_)
             | CodexErr::ServerOverloaded
             | CodexErr::CyberPolicy { .. } => false,
+            CodexErr::InvalidRequest(_) => self.is_retryable_upstream_proxy_error(),
             CodexErr::Stream(..)
             | CodexErr::Timeout
             | CodexErr::RequestTimeout

@@ -600,3 +600,103 @@ fn usage_limit_reached_with_promo_message() {
         assert_eq!(err.to_string(), expected);
     });
 }
+
+#[test]
+fn is_retryable_upstream_proxy_error_matches_reasoning_text() {
+    let err = CodexErr::InvalidRequest(
+        "Error from provider (Console Go): Upstream request failed: [invalid_request_error] The `reasoning_text` in the thinking mode must be passed back to the API.".to_string()
+    );
+    assert!(
+        err.is_retryable(),
+        "reasoning_text error should be retryable"
+    );
+}
+
+#[test]
+fn is_retryable_upstream_proxy_error_matches_reasoning_content() {
+    let err = CodexErr::InvalidRequest(
+        "Error from provider: The `reasoning_content` in the thinking mode must be passed back to the API.".to_string()
+    );
+    assert!(
+        err.is_retryable(),
+        "reasoning_content error should be retryable"
+    );
+}
+
+#[test]
+fn is_retryable_upstream_proxy_error_matches_thinking_mode() {
+    let err = CodexErr::InvalidRequest(
+        "Error from provider: thinking mode requires additional fields".to_string(),
+    );
+    assert!(
+        err.is_retryable(),
+        "thinking mode error should be retryable"
+    );
+}
+
+#[test]
+fn is_retryable_upstream_proxy_error_matches_missing_field_id_backtick() {
+    let err = CodexErr::InvalidRequest(
+        "Failed to deserialize the JSON body into the target type: messages[6]: missing field `id`"
+            .to_string(),
+    );
+    assert!(
+        err.is_retryable(),
+        "missing field `id` error should be retryable"
+    );
+}
+
+#[test]
+fn is_retryable_upstream_proxy_error_matches_missing_field_id_quote() {
+    let err = CodexErr::InvalidRequest(
+        "Failed to deserialize the JSON body into the target type: messages[6]: missing field \"id\"".to_string()
+    );
+    assert!(
+        err.is_retryable(),
+        "missing field \"id\" error should be retryable"
+    );
+}
+
+#[test]
+fn is_retryable_invalid_request_does_not_match_unrelated_errors() {
+    let err = CodexErr::InvalidRequest(
+        "Invalid model parameter: model 'gpt-999' does not exist".to_string(),
+    );
+    assert!(
+        !err.is_retryable(),
+        "unrelated InvalidRequest errors should not be retryable"
+    );
+}
+
+#[test]
+fn is_retryable_invalid_request_does_not_match_empty_message() {
+    let err = CodexErr::InvalidRequest(String::new());
+    assert!(
+        !err.is_retryable(),
+        "empty InvalidRequest should not be retryable"
+    );
+}
+
+#[test]
+fn is_retryable_non_invalid_request_errors_unchanged() {
+    // Stream errors should still be retryable
+    let stream_err = CodexErr::Stream("connection lost".to_string(), None);
+    assert!(
+        stream_err.is_retryable(),
+        "Stream errors should be retryable"
+    );
+
+    // ContextWindowExceeded should not be retryable
+    let ctx_err = CodexErr::ContextWindowExceeded;
+    assert!(
+        !ctx_err.is_retryable(),
+        "ContextWindowExceeded should not be retryable"
+    );
+
+    // TurnAborted should not be retryable
+    let abort_err = CodexErr::TurnAborted;
+    assert!(
+        !abort_err.is_retryable(),
+        "TurnAborted should not be retryable"
+    );
+}

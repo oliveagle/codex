@@ -808,12 +808,18 @@ impl ModelClient {
         );
         let prompt_cache_key = Some(self.prompt_cache_key());
         let service_tier = model_info.service_tier_for_request(service_tier);
+        // Upstream rejects tool_choice when reasoning/thinking is enabled.
+        let tool_choice = if reasoning.is_some() {
+            None
+        } else {
+            Some("auto".to_string())
+        };
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
             instructions: instructions.clone(),
             input,
             tools,
-            tool_choice: "auto".to_string(),
+            tool_choice,
             parallel_tool_calls: prompt.parallel_tool_calls && !model_info.use_responses_lite,
             reasoning,
             store: provider.is_azure_responses_endpoint(),
